@@ -40,12 +40,12 @@ class CoordinatorInterface:
         print("COORDINATOR AGENT → EXECUTION AGENT DEMO")
         print("Complex Multi-Step Workflow Simulation")
         print("="*70)
-        print("\n📋 Scenario: Web Research → PowerPoint Presentation")
+        print("\nScenario: Web Research → PowerPoint Presentation")
         print("="*70 + "\n")
     
     def print_workflow_plan(self, workflow: Dict):
         """Display the planned workflow"""
-        print("\n📊 WORKFLOW PLAN:")
+        print("\nWORKFLOW PLAN:")
         print("-" * 70)
         print(f"Workflow ID: {workflow['workflow_id']}")
         print(f"Topic: {workflow['topic']}")
@@ -56,7 +56,7 @@ class CoordinatorInterface:
             print(f"   Context: {step['context']}")
             print(f"   Description: {step['description']}")
             if step.get('depends_on'):
-                print(f"   ⚠️  Depends on: Step {step['depends_on']}")
+                print(f"   Depends on: Step {step['depends_on']}")
             print()
         
         print("-" * 70)
@@ -72,7 +72,7 @@ class CoordinatorInterface:
             Workflow dictionary
         """
         if not topic:
-            print("\n🔍 What would you like to research and present?")
+            print("\nWhat would you like to research and present?")
             print("Examples:")
             print("  - Artificial Intelligence in Healthcare")
             print("  - Renewable Energy Technologies")
@@ -259,22 +259,22 @@ class CoordinatorInterface:
         """
         try:
             print(f"\n{'='*70}")
-            print(f"📍 STEP {step['step_id']}: {step['name']}")
+            print(f"STEP {step['step_id']}: {step['name']}")
             print(f"{'='*70}")
             print(f"Description: {step['description']}")
             print(f"Context: {step['context']}")
             print(f"Action: {step['action_type']}")
             
             if step.get('depends_on'):
-                print(f"⚠️  Dependency: Requires Step {step['depends_on']} to succeed")
+                print(f"Dependency: Requires Step {step['depends_on']} to succeed")
             
-            print(f"\n⏳ Coordinator → Execution Agent: Delegating task...")
+            print(f"\nCoordinator → Execution Agent: Delegating task...")
             print("-" * 70)
             
             # Validate step structure
             if not step.get('action_type'):
                 error_msg = f"Missing action_type in step {step.get('step_id', 'unknown')}"
-                print(f"❌ {error_msg}")
+                print(f"ERROR: {error_msg}")
                 return ExecutionResult(
                     status=ActionStatus.FAILED.value,
                     task_id=f"{workflow_context.get('workflow_id', 'unknown')}_step_{step.get('step_id', 'unknown')}",
@@ -303,7 +303,7 @@ class CoordinatorInterface:
                 )
             except Exception as e:
                 error_msg = f"Failed to create ExecutionTask: {str(e)}"
-                print(f"❌ {error_msg}")
+                print(f"ERROR: {error_msg}")
                 return ExecutionResult(
                     status=ActionStatus.FAILED.value,
                     task_id=f"{workflow_context.get('workflow_id', 'unknown')}_step_{step.get('step_id', 'unknown')}",
@@ -323,7 +323,7 @@ class CoordinatorInterface:
                 duration = time.time() - start_time
             except Exception as e:
                 error_msg = f"Agent execution exception: {str(e)}"
-                print(f"❌ {error_msg}")
+                print(f"ERROR: {error_msg}")
                 import traceback
                 traceback.print_exc()
                 result = ExecutionResult(
@@ -349,14 +349,14 @@ class CoordinatorInterface:
                     "timestamp": datetime.now().isoformat()
                 })
             except Exception as e:
-                print(f"⚠️  Warning: Failed to store step in history: {e}")
+                print(f"Warning: Failed to store step in history: {e}")
             
             return result
             
         except Exception as e:
             # Catch-all for any unexpected errors
             error_msg = f"Unexpected error in execute_step: {str(e)}"
-            print(f"❌ {error_msg}")
+            print(f"ERROR: {error_msg}")
             import traceback
             traceback.print_exc()
             return ExecutionResult(
@@ -382,32 +382,32 @@ class CoordinatorInterface:
     
     def _print_execution_result(self, result: ExecutionResult, step_id: int):
         """Print formatted execution result"""
-        print("\n📊 EXECUTION RESULT:")
+        print("\nEXECUTION RESULT:")
         print("-" * 70)
         
         # Status with color coding
         status_symbols = {
-            "success": "✅",
-            "failed": "❌",
-            "partial": "⚠️",
-            "awaiting_confirmation": "🔔"
+            "success": "[OK]",
+            "failed": "[FAILED]",
+            "partial": "[PARTIAL]",
+            "awaiting_confirmation": "[AWAITING]"
         }
-        symbol = status_symbols.get(result.status, "❓")
+        symbol = status_symbols.get(result.status, "[?]")
         
         print(f"Status: {symbol} {result.status.upper()}")
         print(f"Duration: {result.duration:.2f}s")
         print(f"Details: {result.details}")
         
         if result.logs:
-            print(f"\n📝 Execution Logs:")
+            print(f"\nExecution Logs:")
             for log in result.logs:
                 print(f"   • {log}")
         
         if result.error:
-            print(f"\n❌ Error: {result.error}")
+            print(f"\nError: {result.error}")
         
         if result.screenshot_path:
-            print(f"\n📸 Screenshot: {result.screenshot_path}")
+            print(f"\nScreenshot: {result.screenshot_path}")
         
         print("-" * 70)
     
@@ -429,11 +429,11 @@ class CoordinatorInterface:
                         try:
                             result = result.replace(placeholder, str(v))
                         except Exception as e:
-                            print(f"⚠️  Warning: Failed to replace placeholder {placeholder}: {e}")
+                            print(f"Warning: Failed to replace placeholder {placeholder}: {e}")
                 return result
             return obj
         except Exception as e:
-            print(f"⚠️  Warning: Error in placeholder replacement: {e}")
+            print(f"Warning: Error in placeholder replacement: {e}")
             return obj  # Return original if replacement fails
 
     def execute_workflow(self, workflow: Dict, interactive: bool = True):
@@ -446,18 +446,18 @@ class CoordinatorInterface:
 
         for i, step in enumerate(workflow['steps'], 1):
             if step.get('depends_on') and step['depends_on'] in failed_steps:
-                print(f"\n⏭️  SKIPPING Step {step['step_id']}: Dependency failed")
+                print(f"\nSKIPPING Step {step['step_id']}: Dependency failed")
                 failed_steps.add(step['step_id'])
                 continue
             if step.get('depends_on') and step['depends_on'] not in completed_steps:
-                print(f"\n⏸️  WAITING: Step {step['step_id']} depends on Step {step['depends_on']}")
+                print(f"\nWAITING: Step {step['step_id']} depends on Step {step['depends_on']}")
                 continue
             if interactive and i > 1:
                 print(f"\n{'='*70}")
                 print(f"Progress: {len(completed_steps)}/{total_steps} steps completed")
-                user_input = input("\n▶️  Press Enter to continue to next step (or 'q' to quit): ").strip().lower()
+                user_input = input("\nPress Enter to continue to next step (or 'q' to quit): ").strip().lower()
                 if user_input == 'q':
-                    print("\n🛑 Workflow cancelled by user")
+                    print("\nWorkflow cancelled by user")
                     workflow['status'] = 'cancelled'
                     break
 
@@ -469,14 +469,14 @@ class CoordinatorInterface:
                 else:
                     step_to_run['params'] = {}
             except Exception as e:
-                print(f"⚠️  Warning: Failed to prepare step parameters: {e}")
+                print(f"Warning: Failed to prepare step parameters: {e}")
                 step_to_run = dict(step)  # Use original step if replacement fails
 
             # Execute step with error handling
             try:
                 result = self.execute_step(step_to_run, workflow)
             except Exception as e:
-                print(f"❌ Critical error executing step {step.get('step_id', 'unknown')}: {e}")
+                print(f"Critical error executing step {step.get('step_id', 'unknown')}: {e}")
                 import traceback
                 traceback.print_exc()
                 failed_steps.add(step['step_id'])
@@ -504,12 +504,12 @@ class CoordinatorInterface:
                     
                     # Clear placeholder if it wasn't replaced (fallback)
                     if '{{web_content}}' in str(step_outputs.get('slides', [])):
-                        print("⚠️  Warning: web_content placeholder not replaced - using fallback")
+                        print("Warning: web_content placeholder not replaced - using fallback")
                         step_outputs['web_content'] = "Content extraction failed or incomplete."
                         
                 else:
                     failed_steps.add(step['step_id'])
-                    print(f"\n❌ Step {step['step_id']} failed!")
+                    print(f"\nStep {step['step_id']} failed!")
                     
                     if interactive:
                         try:
@@ -529,11 +529,11 @@ class CoordinatorInterface:
                             else:
                                 print("Continuing to next step...")
                         except (KeyboardInterrupt, EOFError):
-                            print("\n⚠️  Input interrupted. Continuing workflow...")
+                            print("\nInput interrupted. Continuing workflow...")
                         except Exception as e:
-                            print(f"⚠️  Error during retry prompt: {e}. Continuing...")
+                            print(f"Error during retry prompt: {e}. Continuing...")
             except Exception as e:
-                print(f"⚠️  Warning: Error processing step result: {e}")
+                print(f"Warning: Error processing step result: {e}")
                 # Still mark as failed if we can't process the result
                 if result.status != 'success' and result.status != ActionStatus.SUCCESS.value:
                     failed_steps.add(step['step_id'])
@@ -544,13 +544,13 @@ class CoordinatorInterface:
         try:
             self._print_workflow_summary(workflow, completed_steps, failed_steps)
         except Exception as e:
-            print(f"⚠️  Warning: Failed to print workflow summary: {e}")
+            print(f"Warning: Failed to print workflow summary: {e}")
     
     def _print_workflow_summary(self, workflow: Dict, completed: set, failed: set):
         """Print workflow execution summary with error handling"""
         try:
             print("\n" + "="*70)
-            print("📊 WORKFLOW EXECUTION SUMMARY")
+            print("WORKFLOW EXECUTION SUMMARY")
             print("="*70)
             
             total = len(workflow.get('steps', []))
@@ -561,12 +561,12 @@ class CoordinatorInterface:
             print(f"Topic: {workflow.get('topic', 'N/A')}")
             print(f"Status: {workflow.get('status', 'unknown').upper()}")
             print(f"\nTotal Steps: {total}")
-            print(f"✅ Completed: {completed_count}")
-            print(f"❌ Failed: {failed_count}")
-            print(f"⏭️  Skipped: {total - completed_count - failed_count}")
+            print(f"Completed: {completed_count}")
+            print(f"Failed: {failed_count}")
+            print(f"Skipped: {total - completed_count - failed_count}")
             
             if failed:
-                print(f"\n❌ Failed Steps:")
+                print(f"\nFailed Steps:")
                 for step_id in sorted(failed):
                     try:
                         step = next((s for s in workflow.get('steps', []) if s.get('step_id') == step_id), None)
@@ -582,7 +582,7 @@ class CoordinatorInterface:
             # Save workflow report
             self._save_workflow_report(workflow)
         except Exception as e:
-            print(f"⚠️  Error printing workflow summary: {e}")
+            print(f"Error printing workflow summary: {e}")
             import traceback
             traceback.print_exc()
     
@@ -605,9 +605,9 @@ class CoordinatorInterface:
             with open(report_file, 'w', encoding='utf-8') as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)
             
-            print(f"\n💾 Workflow report saved: {report_file}")
+            print(f"\nWorkflow report saved: {report_file}")
         except Exception as e:
-            print(f"⚠️  Warning: Failed to save workflow report: {e}")
+            print(f"Warning: Failed to save workflow report: {e}")
             import traceback
             traceback.print_exc()
     
@@ -616,13 +616,13 @@ class CoordinatorInterface:
         try:
             self.print_header()
         except Exception as e:
-            print(f"⚠️  Warning: Error printing header: {e}")
+            print(f"Warning: Error printing header: {e}")
         
         # Get topic from user
         try:
             workflow = self.create_workflow()
         except Exception as e:
-            print(f"❌ Error creating workflow: {e}")
+            print(f"Error creating workflow: {e}")
             import traceback
             traceback.print_exc()
             return
@@ -631,33 +631,33 @@ class CoordinatorInterface:
         try:
             self.print_workflow_plan(workflow)
         except Exception as e:
-            print(f"⚠️  Warning: Error printing workflow plan: {e}")
+            print(f"Warning: Error printing workflow plan: {e}")
         
         # Confirm execution
         try:
             print("\n" + "="*70)
-            confirm = input("\n🚀 Ready to execute workflow? (y/n): ").strip().lower()
+            confirm = input("\nReady to execute workflow? (y/n): ").strip().lower()
         except (KeyboardInterrupt, EOFError):
-            print("\n\n👋 Demo cancelled by user")
+            print("\n\nDemo cancelled by user")
             return
         except Exception as e:
-            print(f"⚠️  Error getting confirmation: {e}. Proceeding automatically...")
+            print(f"Error getting confirmation: {e}. Proceeding automatically...")
             confirm = 'y'
         
         if confirm != 'y':
-            print("\n👋 Demo cancelled")
+            print("\nDemo cancelled")
             return
         
         # Execute workflow
         try:
-            print("\n🎬 Starting workflow execution...")
+            print("\nStarting workflow execution...")
             time.sleep(1)
             self.execute_workflow(workflow, interactive=False)
         except KeyboardInterrupt:
-            print("\n\n⚠️  Workflow interrupted by user")
+            print("\n\nWorkflow interrupted by user")
             workflow['status'] = 'cancelled'
         except Exception as e:
-            print(f"\n❌ Critical error during workflow execution: {e}")
+            print(f"\nCritical error during workflow execution: {e}")
             import traceback
             traceback.print_exc()
             workflow['status'] = 'error'
@@ -665,15 +665,15 @@ class CoordinatorInterface:
         # Final message
         try:
             print("\n" + "="*70)
-            print("✨ DEMO COMPLETED!")
+            print("DEMO COMPLETED!")
             print("="*70)
             print("\nCheck the following:")
-            print("  📁 Desktop/agent_presentation/ - Your presentation folder")
-            print("  📄 logs/workflows/ - Detailed execution report")
-            print("  📸 screenshots/ - Error screenshots (if any)")
+            print("  Desktop/agent_presentation/ - Your presentation folder")
+            print("  logs/workflows/ - Detailed execution report")
+            print("  screenshots/ - Error screenshots (if any)")
             print("="*70 + "\n")
         except Exception as e:
-            print(f"⚠️  Warning: Error printing final message: {e}")
+            print(f"Warning: Error printing final message: {e}")
 
 
 def main():
@@ -692,10 +692,10 @@ def main():
         coordinator.demo_mode()
     
     except KeyboardInterrupt:
-        print("\n\n⚠️  Demo interrupted by user")
+        print("\n\nDemo interrupted by user")
     
     except Exception as e:
-        print(f"\n\n❌ Demo error: {e}")
+        print(f"\n\nDemo error: {e}")
         import traceback
         traceback.print_exc()
 

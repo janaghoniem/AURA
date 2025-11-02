@@ -63,7 +63,7 @@ def check_dependencies(logger):
     
     logger.info("Checking dependencies:")
     for dep, available in deps.items():
-        status = "✓" if available else "✗"
+        status = "[OK]" if available else "[MISSING]"
         logger.info(f"  {status} {dep}")
     
     return deps

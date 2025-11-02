@@ -34,7 +34,7 @@ class ExecutionAgentCLI:
         print(f"Version: {status['version']}")
         print("\nAvailable Dependencies:")
         for dep, available in status['dependencies'].items():
-            status_icon = "✓" if available else "✗"
+            status_icon = "[OK]" if available else "[MISSING]"
             print(f"  {status_icon} {dep}")
         print("="*60 + "\n")
     
@@ -137,7 +137,7 @@ class ExecutionAgentCLI:
         text = self.get_input("Text to type")
         
         if not text:
-            print("❌ Text is required!")
+            print("Text is required!")
             return
         
         task = ExecutionTask(
@@ -162,7 +162,7 @@ class ExecutionAgentCLI:
         channel_image = self.get_input("Channel image path (optional)")
         
         if not message:
-            print("❌ Message is required!")
+            print("Message is required!")
             return
         
         params = {
@@ -279,13 +279,13 @@ class ExecutionAgentCLI:
     def system_command_menu(self):
         """System command submenu"""
         print("\n--- SYSTEM COMMANDS ---")
-        print("⚠️  WARNING: System commands can be dangerous!")
+        print("WARNING: System commands can be dangerous!")
         print("High-risk commands will require confirmation.\n")
         
         command = self.get_input("Enter command")
         
         if not command:
-            print("❌ Command is required!")
+            print("Command is required!")
             return
         
         task = ExecutionTask(
@@ -302,7 +302,7 @@ class ExecutionAgentCLI:
     
     def execute_task(self, task: ExecutionTask):
         """Execute task and display result"""
-        print("\n⏳ Executing task...")
+        print("\nExecuting task...")
         print(f"Action: {task.action_type}")
         print(f"Context: {task.context}")
         print("-" * 40)
@@ -320,10 +320,10 @@ class ExecutionAgentCLI:
                 print(f"  • {log}")
         
         if result.error:
-            print(f"\n❌ Error: {result.error}")
+            print(f"\nError: {result.error}")
         
         if result.screenshot_path:
-            print(f"\n📸 Screenshot: {result.screenshot_path}")
+            print(f"\nScreenshot: {result.screenshot_path}")
         
         print("-" * 40)
         
@@ -371,17 +371,17 @@ class ExecutionAgentCLI:
                 elif choice == "5":
                     self.view_audit_log()
                 elif choice == "0":
-                    print("\n👋 Goodbye!")
+                    print("\nGoodbye!")
                     self.running = False
                 else:
-                    print("\n❌ Invalid choice!")
+                    print("\nInvalid choice!")
             
             except KeyboardInterrupt:
-                print("\n\n👋 Interrupted by user. Goodbye!")
+                print("\n\nInterrupted by user. Goodbye!")
                 self.running = False
             
             except Exception as e:
-                print(f"\n❌ Error: {e}")
+                print(f"\nError: {e}")
                 import traceback
                 traceback.print_exc()
 
