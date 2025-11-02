@@ -1,0 +1,33 @@
+[
+  {
+    "action": "extract_web_content",
+    "context": "web",
+    "strategy": "web",
+    "params": {
+      "action_type": "extract_web_content",
+      "search_query": "latest AI research 2025",
+      "search_engine": "bing"
+    },
+    "task_id": "extract_001",
+    "priority": "normal",
+    "timeout": 60,
+    "retry_count": 2
+  },
+  {
+    "action": "save_file",
+    "context": "system",
+    "strategy": "system",
+    "params": {
+      "action_type": "save_file",
+      "file_path": "{{desktop_path}}/search_results_{{timestamp}}.txt",
+      "content": "{{web_content}}",
+      "file_type": "txt"
+    },
+    "task_id": "save_001",
+    "depends_on": "extract_001",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  }
+]
+
