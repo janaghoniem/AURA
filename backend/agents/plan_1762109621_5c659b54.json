@@ -1,0 +1,15 @@
+{
+  "llm_reasoning": "[NEEDS INFO]\n\n1. Open the word document\n2. Go to File > Save As\n3. Choose PDF as the format\n4. Save the file in your desktop\n\n[NEEDS INFO]\n\n1. Go to File > Save As\n2. Choose PDF as the format\n3. Save the file in your desktop\n\n[NEEDS INFO]\n\n\n[NEEDS INFO]\n\n\n[NEEDS INFO]\n\n\n[NEEDS INFO]\n\n\n[NEEDS INFO]\n\n\n[NEEDS INFO]\n\n\n[NEEDS INFO]\n",
+  "llm_json_output": {
+    "action": "save",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "save",
+      "app_name": "word",
+      "destination_hint": "desktop",
+      "original_text": "save this"
+    },
+    "task_id": ""
+  }
+}
