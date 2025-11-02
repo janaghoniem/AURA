@@ -284,16 +284,30 @@ class WebStrategy:
             if not SELENIUM_AVAILABLE:
                 return self._create_error_result(task, logs, start_time, "Selenium not available")
             
-            # Initialize browser
-            self.driver = webdriver.Chrome()
-            logs.append("Browser opened")
-            
-            url = task.params.get("url")
-            self.driver.get(url)
-            logs.append(f"Navigated to {url}")
-            
             # Execute web-specific actions
             action_type = task.params.get("action_type", "")
+            
+            # Extract and web_search create their own drivers
+            if action_type == "extract_web_content":
+                return self._extract_web_content(task, logs, start_time)
+            
+            # Initialize browser for other actions (use Edge instead of Chrome)
+            if not self.driver:
+                try:
+                    self.driver = webdriver.Edge()
+                    logs.append("Edge browser opened")
+                except Exception as e:
+                    # Fallback to Chrome if Edge fails
+                    try:
+                        self.driver = webdriver.Chrome()
+                        logs.append("Chrome browser opened (Edge unavailable)")
+                    except Exception as e2:
+                        return self._create_error_result(task, logs, start_time, f"Failed to open browser: {e2}")
+            
+            url = task.params.get("url")
+            if url:
+                self.driver.get(url)
+                logs.append(f"Navigated to {url}")
             
             if action_type == "login":
                 return self._login(task, logs, start_time)
@@ -303,8 +317,6 @@ class WebStrategy:
                 return self._fill_form(task, logs, start_time)
             elif action_type == "web_search":
                 return self._web_search(task, logs, start_time)
-            elif action_type == "extract_web_content":
-                return self._extract_web_content(task, logs, start_time)
             else:
                 return self._create_error_result(task, logs, start_time, f"Unknown web action: {action_type}")
         
@@ -425,34 +437,99 @@ class WebStrategy:
         """Extract text from the first website after a search result (Selenium, Edge/Bing preferred)"""
         if not SELENIUM_AVAILABLE:
             return self._create_error_result(task, logs, start_time, "Selenium not available for extraction")
+        
         search_engine = task.params.get("search_engine", "bing")
+        search_query = task.params.get("search_query", "")
+        driver = None
+        
         try:
-            driver = webdriver.Edge()
+            # Create Edge driver (preferred)
+            try:
+                driver = webdriver.Edge()
+                logs.append("Edge browser opened for content extraction")
+            except Exception as e:
+                # Fallback to Chrome if Edge fails
+                try:
+                    driver = webdriver.Chrome()
+                    logs.append("Chrome browser opened for content extraction (Edge unavailable)")
+                except Exception as e2:
+                    return self._create_error_result(task, logs, start_time, f"Failed to open browser: {e2}")
+            
             driver.implicitly_wait(10)
-            search_query = task.params.get("search_query", "")
             logs.append(f"Searching for: {search_query}")
-            if search_engine == "bing":
-                search_url = f"https://www.bing.com/search?q={search_query.replace(' ', '+')}"
-            else:
-                search_url = f"https://www.bing.com/search?q={search_query.replace(' ', '+')}"
+            
+            # Build search URL (always use Bing for better automation compatibility)
+            search_url = f"https://www.bing.com/search?q={search_query.replace(' ', '+')}"
             driver.get(search_url)
             logs.append(f"Opened search page: {search_url}")
+            time.sleep(2)  # Wait for page to load
+            
             # Find first organic result link
-            first_result = driver.find_element(By.CSS_SELECTOR, 'li.b_algo a')
-            first_url = first_result.get_attribute("href")
-            logs.append(f"Navigating to first result: {first_url}")
-            driver.get(first_url)
+            try:
+                first_result = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'li.b_algo a'))
+                )
+                first_url = first_result.get_attribute("href")
+                logs.append(f"Navigating to first result: {first_url}")
+                driver.get(first_url)
+                time.sleep(2)  # Wait for content page to load
+            except Exception as e:
+                logs.append(f"Warning: Could not find first result link: {e}")
+                # Try alternative selector
+                try:
+                    first_result = driver.find_element(By.CSS_SELECTOR, 'h2 a')
+                    first_url = first_result.get_attribute("href")
+                    logs.append(f"Found alternative result: {first_url}")
+                    driver.get(first_url)
+                    time.sleep(2)
+                except Exception as e2:
+                    return self._create_error_result(task, logs, start_time, f"Failed to find search result: {e2}")
+            
             # Extract main text: collect visible paragraphs
             paragraphs = driver.find_elements(By.TAG_NAME, "p")
             text_content = "\n".join([p.text for p in paragraphs if p.text.strip()])
-            driver.quit()
+            
+            # If no paragraphs found, try getting body text
+            if not text_content or len(text_content) < 50:
+                try:
+                    body = driver.find_element(By.TAG_NAME, "body")
+                    text_content = body.text
+                    logs.append("Extracted content from body element")
+                except:
+                    pass
+            
+            if not text_content or len(text_content) < 10:
+                text_content = f"Content extraction from {first_url} - Limited content available. Please check the source URL."
+                logs.append("Warning: Minimal content extracted")
+            
             logs.append(f"Extracted {len(text_content)} characters from first result.")
-            return self._create_success_result(
-                task, logs, start_time, details=f"Extracted web content.",
-            )._replace(metadata={"web_content": text_content, "source_url": first_url})
+            
+            return ExecutionResult(
+                status=ActionStatus.SUCCESS.value,
+                task_id=task.task_id,
+                context=task.context,
+                action=task.action_type,
+                details=f"Extracted {len(text_content)} characters of web content.",
+                logs=logs,
+                timestamp=datetime.now().isoformat(),
+                duration=time.time() - start_time,
+                metadata={"web_content": text_content, "source_url": first_url}
+            )
+            
         except Exception as e:
+            error_msg = f"Web content extraction failed: {e}"
             logs.append(f"Extraction error: {e}")
-            return self._create_error_result(task, logs, start_time, f"Web content extraction failed: {e}")
+            import traceback
+            logs.append(f"Traceback: {traceback.format_exc()}")
+            return self._create_error_result(task, logs, start_time, error_msg)
+        finally:
+            # Always close the driver
+            if driver:
+                try:
+                    driver.quit()
+                    logs.append("Browser closed")
+                except:
+                    pass
     
     def _create_success_result(self, task, logs, start_time, details):
         """Helper to create success result"""
@@ -504,6 +581,9 @@ class SystemStrategy:
             
             elif action_type == "verify_file":
                 return self._verify_file(task, logs, start_time)
+            
+            elif action_type == "save_file":
+                return self._save_file(task, logs, start_time)
             
             # Handle generic commands
             command = task.params.get("command")
@@ -621,6 +701,55 @@ class SystemStrategy:
         
         except Exception as e:
             return self._create_error_result(task, logs, start_time, f"Failed to verify files: {e}")
+    
+    def _save_file(self, task, logs, start_time):
+        """Save content to a text or JSON file"""
+        import os
+        
+        file_path = task.params.get("file_path")
+        content = task.params.get("content", "")
+        
+        if not file_path:
+            return self._create_error_result(task, logs, start_time, "Missing file_path parameter")
+        
+        try:
+            # Create directory if it doesn't exist
+            directory = os.path.dirname(file_path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+                logs.append(f"Created directory: {directory}")
+            
+            # Write content to file
+            mode = 'w'
+            encoding = 'utf-8'
+            
+            with open(file_path, mode, encoding=encoding) as f:
+                f.write(content)
+            
+            file_size = os.path.getsize(file_path)
+            logs.append(f"File saved: {file_path}")
+            logs.append(f"File size: {file_size} bytes")
+            
+            return ExecutionResult(
+                status=ActionStatus.SUCCESS.value,
+                task_id=task.task_id,
+                context=task.context,
+                action="save_file",
+                details=f"File saved successfully: {file_path}",
+                logs=logs,
+                timestamp=datetime.now().isoformat(),
+                duration=time.time() - start_time,
+                metadata={
+                    "file_path": file_path,
+                    "file_size": file_size,
+                    "content_length": len(content)
+                }
+            )
+        
+        except PermissionError:
+            return self._create_error_result(task, logs, start_time, f"Permission denied: Cannot write to {file_path}")
+        except Exception as e:
+            return self._create_error_result(task, logs, start_time, f"Failed to save file: {e}")
     
     def _create_error_result(self, task, logs, start_time, error):
         """Helper to create error result"""
