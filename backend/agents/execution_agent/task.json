@@ -1,0 +1,10 @@
+{
+    "action": "open_calculator",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+        "action_type": "open_app",
+        "app_name": "word"
+    },
+    "task_id": "coord_001"
+}
