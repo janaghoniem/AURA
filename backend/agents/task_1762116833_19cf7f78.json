@@ -1,0 +1,18 @@
+{
+  "reasoning": "The user will be prompted with the option of saving the downloaded lecture as an image or PDF format. They can choose either one based on their preference. Once they have chosen the desired format, the system will automatically save the file to the designated location.",
+  "task_json": {
+    "action": "save",
+    "context": "system",
+    "params": {
+      "action_type": "save_as_pdf",
+      "file_path": "{{desktop_path}}/document.pdf",
+      "content": "{{file_content}}",
+      "file_type": "word"
+    },
+    "task_id": "",
+    "depends_on": "",
+    "priority": "",
+    "timeout": "",
+    "retry_count": ""
+  }
+}
