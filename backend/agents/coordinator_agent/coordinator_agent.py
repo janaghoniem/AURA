@@ -12,8 +12,10 @@ from utils.http_utils import send_request
 load_dotenv()
 
 # --- Initialize LLM ---
+from config.settings import LLM_MODEL
+
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
+    model=LLM_MODEL,  # From settings.py
     temperature=0.2,
     max_output_tokens=2048
 )
@@ -108,114 +110,114 @@ def create_coordinator_graph():
         # Build decomposition prompt
         prompt = f"""You are the YUSR Coordinator Agent. Decompose user tasks into executable subtasks.
 
-        # INPUT FROM LANGUAGE AGENT
-        {json.dumps(raw_task, indent=2)}
+            # INPUT FROM LANGUAGE AGENT
+            {json.dumps(raw_task, indent=2)}
 
-        # HISTORICAL CONTEXT
-        {historical_context}
+            # HISTORICAL CONTEXT
+            {historical_context}
 
-        # YOUR TASK
-        Analyze the input and determine if decomposition is needed:
+            # YOUR TASK
+            Analyze the input and determine if decomposition is needed:
 
-        **SIMPLE TASK** (single action):
-        - "open calculator" → Already complete, just add task_id
-        - "send discord message" → Already structured correctly
+            **SIMPLE TASK** (single action):
+            - "open calculator" → Already complete, just add task_id
+            - "send discord message" → Already structured correctly
 
-        **COMPLEX TASK** (multiple steps with dependencies):
-        - "check moodle assignment and create word doc with analysis"
-        → Step 1: Login to Moodle (web)
-        → Step 2: Extract assignment text (web) 
-        → Step 3: Analyze requirements (reasoning)
-        → Step 4: Generate execution plan (reasoning)
-        → Step 5: Create Word doc with content (local)
+            **COMPLEX TASK** (multiple steps with dependencies):
+            - "check moodle assignment and create word doc with analysis"
+            → Step 1: Login to Moodle (web)
+            → Step 2: Extract assignment text (web) 
+            → Step 3: Analyze requirements (reasoning)
+            → Step 4: Generate execution plan (reasoning)
+            → Step 5: Create Word doc with content (local)
 
-        # EXECUTION CONTEXTS
-        - **local**: Desktop apps (PowerPoint, Word, Calculator, Discord desktop)
-        - **web**: Browser automation (Moodle login, form filling, data extraction)
-        - **system**: OS commands (file operations, scripts)
-        - **reasoning**: Text analysis, summarization, content generation, decision-making
+            # EXECUTION CONTEXTS
+            - **local**: Desktop apps (PowerPoint, Word, Calculator, Discord desktop)
+            - **web**: Browser automation (Moodle login, form filling, data extraction)
+            - **system**: OS commands (file operations, scripts)
+            - **reasoning**: Text analysis, summarization, content generation, decision-making
 
-        # DEPENDENCY RULES
-        - **parallel**: Independent tasks (can run simultaneously)
-        - **sequential**: Dependent tasks (output of task N feeds task N+1)
-        - Use "depends_on" field to reference previous task_id
+            # DEPENDENCY RULES
+            - **parallel**: Independent tasks (can run simultaneously)
+            - **sequential**: Dependent tasks (output of task N feeds task N+1)
+            - Use "depends_on" field to reference previous task_id
 
-        # OUTPUT FORMAT
-        Return ONLY valid JSON (no markdown, no explanations):
+            # OUTPUT FORMAT
+            Return ONLY valid JSON (no markdown, no explanations):
 
-        **For simple tasks** (no decomposition needed):
-        {{
-        "needs_decomposition": false,
-        "enhanced_task": {{
-            "task_id": "uuid",
-            "action": "same as input",
-            "context": "local|web|system|reasoning",
-            "params": {{ /* same as input, ensure action_type exists */ }},
-            "priority": "normal",
-            "timeout": 30,
-            "retry_count": 3
-        }}
-        }}
-
-        **For complex tasks** (decomposition required):
-        {{
-        "needs_decomposition": true,
-        "parallel": [
+            **For simple tasks** (no decomposition needed):
             {{
-            "task_id": "uuid-1",
-            "action": "descriptive_name",
-            "context": "web",
-            "params": {{
-                "action_type": "login",
-                "url": "https://moodle.edu",
-                "username": "$USER",
-                "password": "$PASS"
-            }},
-            "priority": "high",
-            "timeout": 60
+            "needs_decomposition": false,
+            "enhanced_task": {{
+                "task_id": "uuid",
+                "action": "same as input",
+                "context": "local|web|system|reasoning",
+                "params": {{ /* same as input, ensure action_type exists */ }},
+                "priority": "normal",
+                "timeout": 30,
+                "retry_count": 3
             }}
-        ],
-        "sequential": [
+            }}
+
+            **For complex tasks** (decomposition required):
             {{
-            "task_id": "uuid-2",
-            "action": "extract_assignment",
-            "context": "web",
-            "params": {{
-                "action_type": "extract_data",
-                "selectors": {{
-                "title": ".assignment-title",
-                "description": ".assignment-body"
+            "needs_decomposition": true,
+            "parallel": [
+                {{
+                "task_id": "uuid-1",
+                "action": "descriptive_name",
+                "context": "web",
+                "params": {{
+                    "action_type": "login",
+                    "url": "https://moodle.edu",
+                    "username": "$USER",
+                    "password": "$PASS"
+                }},
+                "priority": "high",
+                "timeout": 60
                 }}
-            }},
-            "depends_on": "uuid-1"
-            }},
-            {{
-            "task_id": "uuid-3",
-            "action": "analyze_requirements",
-            "context": "reasoning",
-            "params": {{
-                "prompt": "Analyze this assignment and create execution plan",
-                "input_from": "uuid-2"
-            }},
-            "depends_on": "uuid-2"
+            ],
+            "sequential": [
+                {{
+                "task_id": "uuid-2",
+                "action": "extract_assignment",
+                "context": "web",
+                "params": {{
+                    "action_type": "extract_data",
+                    "selectors": {{
+                    "title": ".assignment-title",
+                    "description": ".assignment-body"
+                    }}
+                }},
+                "depends_on": "uuid-1"
+                }},
+                {{
+                "task_id": "uuid-3",
+                "action": "analyze_requirements",
+                "context": "reasoning",
+                "params": {{
+                    "prompt": "Analyze this assignment and create execution plan",
+                    "input_from": "uuid-2"
+                }},
+                "depends_on": "uuid-2"
+                }}
+            ]
             }}
-        ]
-        }}
 
-        **If missing critical info** (ambiguous recipient, unclear platform):
-        {{
-        "needs_clarification": true,
-        "question": "Which Moodle course should I check? Please specify the course name."
-        }}
+            **If missing critical info** (ambiguous recipient, unclear platform):
+            {{
+            "needs_clarification": true,
+            "question": "Which Moodle course should I check? Please specify the course name."
+            }}
 
-        # CRITICAL RULES
-        1. Every task MUST have unique task_id (use uuid)
-        2. Execution tasks MUST include "action_type" in params
-        3. Never invent information (if username unknown, use placeholder "$USER")
-        4. Preserve original intent from Language Agent input
-        5. For file operations, ensure paths are specific (not "desktop" but "C:\\Users\\$USER\\Desktop")
+            # CRITICAL RULES
+            1. Every task MUST have unique task_id (use uuid)
+            2. Execution tasks MUST include "action_type" in params
+            3. Never invent information (if username unknown, use placeholder "$USER")
+            4. Preserve original intent from Language Agent input
+            5. For file operations, ensure paths are specific (not "desktop" but "C:\\Users\\$USER\\Desktop")
 
-        Now analyze the input task and return ONLY the JSON response:"""
+            Now analyze the input task and return ONLY the JSON response:"""
 
         # Get LLM response
         response = await llm.ainvoke(prompt)
