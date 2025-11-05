@@ -10,9 +10,9 @@ import json
 import sys
 from typing import Dict, Any
 
-from exec_agent_config import ExecutionContext
-from exec_agent_models import ExecutionTask
-from exec_agent_main import ExecutionAgent
+from backend.agents.execution_agent.core.exec_agent_config import ExecutionContext
+from backend.agents.execution_agent.core.exec_agent_models import ExecutionTask
+from backend.agents.execution_agent.core.exec_agent_main import ExecutionAgent
 
 
 class ExecutionAgentCLI:

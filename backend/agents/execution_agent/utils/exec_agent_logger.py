@@ -10,7 +10,12 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from exec_agent_config import Config
+# from backend.agents.execution_agent.core.exec_agent_config import Config
+    
+# from core import ExecutionTask, ExecutionResult, Config, ActionStatus, StatusCode
+
+from core.exec_agent_config import Config, ActionStatus, StatusCode
+from core.exec_agent_models import ExecutionTask, ExecutionResult
 
 
 def setup_logging(name="ExecutionAgent", log_level=None):

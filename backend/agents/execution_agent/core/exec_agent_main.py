@@ -12,15 +12,28 @@ from datetime import datetime
 from typing import Dict
 from dataclasses import asdict
 
-from exec_agent_config import Config, ExecutionContext, ActionStatus
-from exec_agent_models import ExecutionTask, ExecutionResult
-from exec_agent_logger import setup_logging
-from exec_agent_deps import check_dependencies
-from exec_agent_vision import VisionLayer
-from exec_agent_action import ActionLayer
-from exec_agent_safety import SafetyLayer
-from exec_agent_strategies import LocalStrategy, WebStrategy, SystemStrategy
+# from backend.agents.execution_agent.core.exec_agent_config import Config, ExecutionContext, ActionStatus
+# from backend.agents.execution_agent.core.exec_agent_models import ExecutionTask, ExecutionResult
+# from backend.agents.execution_agent.utils.exec_agent_logger import setup_logging
+# from backend.agents.execution_agent.core.exec_agent_deps import check_dependencies
+# from backend.agents.execution_agent.layers.exec_agent_vision import VisionLayer
+# from backend.agents.execution_agent.layers.exec_agent_action import ActionLayer
+# from backend.agents.execution_agent.layers.exec_agent_safety import SafetyLayer
 
+
+# ✅ CORRECT:
+from .exec_agent_config import Config, ExecutionContext, ActionStatus
+from .exec_agent_models import ExecutionTask, ExecutionResult
+from .exec_agent_deps import check_dependencies
+
+# Import from other packages
+from layers.exec_agent_vision import VisionLayer
+from layers.exec_agent_action import ActionLayer
+from layers.exec_agent_safety import SafetyLayer
+from strategies.local_strategy import LocalStrategy
+from strategies.web_strategy import WebStrategy
+from strategies.system_strategy import SystemStrategy
+from utils import setup_logging
 
 class ExecutionAgent:
     """
@@ -58,7 +71,7 @@ class ExecutionAgent:
         
         # Integrate PowerPoint handler
         try:
-            from exec_agent_ppt_handler import integrate_powerpoint_handler
+            from backend.agents.execution_agent.handlers.exec_agent_ppt_handler import integrate_powerpoint_handler
             local_strategy = integrate_powerpoint_handler(local_strategy, self.logger)
             self.logger.info("PowerPoint handler integrated")
         except ImportError:

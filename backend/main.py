@@ -1,7 +1,7 @@
 # backend/main.py
 from fastapi import FastAPI, Request
 from agents.coordinator_agent.coordinator_agent import handle_coordination
-from agents.execution_agent.exec_agent_main import execute_task
+from backend.agents.execution_agent.core.exec_agent_main import execute_task
 
 app = FastAPI(title="YUSR Unified Multi-Agent Backend")
 

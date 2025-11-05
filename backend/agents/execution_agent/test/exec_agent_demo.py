@@ -18,9 +18,9 @@ import os
 from datetime import datetime
 from typing import List, Dict
 
-from exec_agent_main import ExecutionAgent
-from exec_agent_models import ExecutionTask, ExecutionResult
-from exec_agent_config import ExecutionContext, ActionStatus
+from backend.agents.execution_agent.core.exec_agent_main import ExecutionAgent
+from backend.agents.execution_agent.core.exec_agent_models import ExecutionTask, ExecutionResult
+from backend.agents.execution_agent.core.exec_agent_config import ExecutionContext, ActionStatus
 
 
 class CoordinatorInterface:
@@ -92,40 +92,43 @@ class CoordinatorInterface:
             "start_time": datetime.now().isoformat(),
             "status": "planned",
             "steps": [
-                {
+                
+                        {
                     "step_id": 1,
-                    "name": "Open Web Browser",
-                    "context": "local",
-                    "description": "Launch default web browser",
-                    "action_type": "open_app",
+                     "name": "web_search",
+                    "description": "web_search",
+                    "action": "extract_web_content",
+                    "context": "web",
+                    "strategy": "web",
+                     "action_type": "extract_web_content",
                     "params": {
-                        "app_name": "Edge"  # or "msedge" or "firefox"
+                    "action_type": "extract_web_content",
+                    "search_query": "{{research_topic}}",
+                    "search_engine": "bing"
                     },
-                    "depends_on": None
+                    "task_id": "extract_source_1",
+                    "priority": "normal",
+                    "timeout": 60,
+                    "retry_count": 2
                 },
                 {
                     "step_id": 2,
-                    "name": "Search for Topic",
-                    "context": "local",
-                    "description": f"Navigate to search engine and search for '{topic}'",
-                    "action_type": "web_search",
+                    "name": "save_json",
+                    "description": "save_json",
+                    "action": "save_file",
+                    "context": "system",
+                    "strategy": "system",
+                    "action_type": "save_file",
                     "params": {
-                        "search_query": topic,
-                        "search_engine": "google"
+                    "action_type": "save_file",
+                    "file_path": "{{desktop_path}}/Research_Reports/{{report_name}}_{{timestamp}}/research_data.json",
+                    "content": "{\n  \"topic\": \"{{research_topic}}\",\n  \"timestamp\": \"{{timestamp}}\",\n  \"source\": {\n    \"url\": \"{{source_url}}\",\n    \"content\": \"{{web_content}}\"\n  }\n}",
+                    "file_type": "json"
                     },
-                    "depends_on": 1
-                },
-                {
-                    "step_id": 2.5,
-                    "name": "Extract Web Content",
-                    "context": "local",
-                    "description": "Extract main text from the first search result website.",
-                    "action_type": "extract_web_content",
-                    "params": {
-                        "search_query": topic,
-                        "search_engine": "google"
-                    },
-                    "depends_on": 2
+                    "task_id": "save_json",
+                    "priority": "normal",
+                    "timeout": 30,
+                    "retry_count": 2
                 },
                 {
                     "step_id": 3,

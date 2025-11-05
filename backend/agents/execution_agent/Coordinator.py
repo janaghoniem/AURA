@@ -10,8 +10,14 @@ Supports:
 import json
 import os
 from datetime import datetime
-from exec_agent_main import ExecutionAgent
+# from backend.agents.execution_agent.core.exec_agent_main import ExecutionAgent
 
+# from core import ExecutionAgent, ExecutionTask, ExecutionResult, ExecutionContext, ActionStatus
+# from strategies import LocalStrategy, WebStrategy, SystemStrategy
+
+from core.exec_agent_main import ExecutionAgent
+# from core.exec_agent_models import ExecutionResult, ExecutionTask, ExecutionResult, ExecutionContext, ActionStatus
+from strategies.local_strategy import LocalStrategy
 
 def replace_placeholders(obj, context, **kwargs):
     """Recursively replace {{key}} placeholders with context values"""

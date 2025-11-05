@@ -23,6 +23,25 @@ class ExecutionContext(Enum):
     MOBILE = "mobile"
     HYBRID = "hybrid"
 
+class StatusCode:
+    """HTTP-style status codes for execution results"""
+    # Success codes (2xx)
+    SUCCESS = 200
+    PARTIAL_SUCCESS = 206
+    
+    # Client errors (4xx) - Task/Parameter issues
+    BAD_REQUEST = 400           # Invalid task structure
+    UNAUTHORIZED = 401          # Permission denied
+    NOT_FOUND = 404            # Element/resource not found
+    TIMEOUT = 408              # Task timeout
+    UNSUPPORTED_ACTION = 415   # Action type not supported
+    
+    # Server errors (5xx) - System/Agent issues
+    INTERNAL_ERROR = 500       # Agent internal error
+    NOT_IMPLEMENTED = 501      # Feature not implemented
+    DEPENDENCY_FAILED = 503    # Required dependency missing
+    AGENT_UNAVAILABLE = 503    # Agent not responding
+
 
 class ActionStatus(Enum):
     """Task execution status"""

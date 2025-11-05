@@ -1,0 +1,207 @@
+ [
+    {
+      "task_id": "discord_001",
+      "action": "open_discord",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "open_app",
+        "app_name": "Discord"
+      },
+      "priority": "high",
+      "timeout": 30,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_002",
+      "action": "wait_app_load",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "wait_for_app",
+        "app_name": "Discord",
+        "wait_time": 5
+      },
+      "priority": "normal",
+      "timeout": 10,
+      "retry_count": 1
+    },
+    {
+      "task_id": "discord_003",
+      "action": "open_quick_switcher",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "hotkey",
+        "keys": ["ctrl", "k"]
+      },
+      "priority": "normal",
+      "timeout": 5,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_004",
+      "action": "search_server",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "type_text",
+        "text": "habiba'server"
+      },
+      "priority": "high",
+      "timeout": 10,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_005",
+      "action": "select_server",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "press_key",
+        "key": "enter"
+      },
+      "priority": "normal",
+      "timeout": 5,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_006",
+      "action": "wait_server_load",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "wait",
+        "duration": 3
+      },
+      "priority": "low",
+      "timeout": 5,
+      "retry_count": 1
+    },
+    {
+      "task_id": "discord_007",
+      "action": "find_voice_channel",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "click_element",
+        "element": {
+          "text": "General Voice",
+          "type": "voice_channel"
+        }
+      },
+      "priority": "high",
+      "timeout": 20,
+      "retry_count": 3
+    },
+    {
+      "task_id": "discord_008",
+      "action": "join_voice",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "join_voice_channel",
+        "channel_name": "General Voice"
+      },
+      "priority": "high",
+      "timeout": 15,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_009",
+      "action": "wait_voice_connect",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "wait",
+        "duration": 2
+      },
+      "priority": "low",
+      "timeout": 5,
+      "retry_count": 1
+    },
+    {
+      "task_id": "discord_010",
+      "action": "find_text_channel",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "click_element",
+        "element": {
+          "text": "general",
+          "type": "text_channel"
+        }
+      },
+      "priority": "normal",
+      "timeout": 15,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_011",
+      "action": "focus_message_box",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "press_key",
+        "key": "tab"
+      },
+      "priority": "normal",
+      "timeout": 5,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_012",
+      "action": "send_message",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "send_message",
+        "platform": "discord",
+        "server_name": "habiba'server",
+        "message": "Hello from automation workflow!"
+      },
+      "priority": "high",
+      "timeout": 10,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_013",
+      "action": "save_activity_log",
+      "context": "system",
+      "strategy": "system",
+      "params": {
+        "action_type": "save_file",
+        "file_path": "C:\\Users\\Public\\Documents\\discord_activity.log",
+        "content": "Discord Activity Log\nTimestamp: {timestamp}\nServer: habiba'server\nChannel: general\nAction: Message sent\nStatus: Success"
+      },
+      "priority": "low",
+      "timeout": 10,
+      "retry_count": 2
+    },
+    {
+      "task_id": "discord_014",
+      "action": "leave_voice",
+      "context": "local",
+      "strategy": "local",
+      "params": {
+        "action_type": "leave_voice_channel"
+      },
+      "priority": "normal",
+      "timeout": 10,
+      "retry_count": 1
+    },
+    {
+      "task_id": "discord_015",
+      "action": "workflow_complete",
+      "context": "system",
+      "strategy": "system",
+      "params": {
+        "action_type": "log_completion",
+        "workflow_id": "discord_001",
+        "status": "completed"
+      },
+      "priority": "low",
+      "timeout": 5,
+      "retry_count": 1
+    }
+  ]

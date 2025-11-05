@@ -1,0 +1,193 @@
+[
+  {
+    "action": "extract_web_content",
+    "context": "web",
+    "strategy": "web",
+    "params": {
+      "action_type": "extract_web_content",
+      "search_query": "{{research_topic}}",
+      "search_engine": "google",
+      "max_chars": 500
+    },
+    "task_id": "extract_source_1",
+    "priority": "normal",
+    "timeout": 60,
+    "retry_count": 3
+  },
+  {
+    "action": "create_presentation_folder",
+    "context": "system",
+    "strategy": "system",
+    "params": {
+      "action_type": "create_folder",
+      "folder_path": "{{desktop_path}}/agent_presentation"
+    },
+    "task_id": "create_folder",
+    "priority": "normal",
+    "timeout": 10,
+    "retry_count": 2
+  },
+  {
+    "action": "save_research_data",
+    "context": "system",
+    "strategy": "system",
+    "params": {
+      "action_type": "save_file",
+      "file_path": "{{desktop_path}}/agent_presentation/research_data.json",
+      "content": "{\"topic\": \"{{research_topic}}\", \"timestamp\": \"{{timestamp}}\", \"source\": {\"url\": \"{{source_url}}\", \"content\": \"{{web_content}}\"}}",
+      "file_type": "json"
+    },
+    "task_id": "save_json",
+    "depends_on": "create_folder",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "open_powerpoint",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "open_app",
+      "app_name": "PowerPoint"
+    },
+    "task_id": "open_ppt",
+    "depends_on": "create_folder",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "create_title_slide",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "create_title_slide",
+      "title": "{{research_topic}}",
+      "subtitle": "Research Presentation - {{timestamp_formatted}}"
+    },
+    "task_id": "create_title",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "add_introduction_slide",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "add_content_slides",
+      "slides": [
+        {
+          "title": "Introduction",
+          "content": "Overview of {{research_topic}}\n\nThis presentation covers:\n• Background information\n• Key research findings\n• Practical applications\n• Future directions"
+        }
+      ]
+    },
+    "task_id": "add_intro",
+    "depends_on": "create_title",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "add_research_content_slide",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "add_content_slides",
+      "slides": [
+        {
+          "title": "Research Findings",
+          "content": "{{web_content}}"
+        }
+      ]
+    },
+    "task_id": "add_findings",
+    "depends_on": "add_intro",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "add_applications_slide",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "add_content_slides",
+      "slides": [
+        {
+          "title": "Applications",
+          "content": "Practical applications of {{research_topic}}:\n\n• Industry use cases\n• Academic research\n• Real-world implementations\n• Emerging trends"
+        }
+      ]
+    },
+    "task_id": "add_applications",
+    "depends_on": "add_findings",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "add_conclusion_slide",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "add_content_slides",
+      "slides": [
+        {
+          "title": "Conclusion",
+          "content": "Summary of {{research_topic}}\n\n• Key takeaways from research\n• Important findings\n• Future research directions\n\nSource: {{source_url}}\nGenerated: {{timestamp}}"
+        }
+      ]
+    },
+    "task_id": "add_conclusion",
+    "depends_on": "add_applications",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "save_presentation",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "save_presentation",
+      "filename": "{{report_name}}_Presentation.pptx",
+      "folder": "{{desktop_path}}/agent_presentation"
+    },
+    "task_id": "save_ppt",
+    "depends_on": "add_conclusion",
+    "priority": "normal",
+    "timeout": 30,
+    "retry_count": 2
+  },
+  {
+    "action": "close_powerpoint",
+    "context": "local",
+    "strategy": "local",
+    "params": {
+      "action_type": "close_app",
+      "app_name": "PowerPoint"
+    },
+    "task_id": "close_ppt",
+    "depends_on": "save_ppt",
+    "priority": "normal",
+    "timeout": 15,
+    "retry_count": 2
+  },
+  {
+    "action": "verify_presentation_files",
+    "context": "system",
+    "strategy": "system",
+    "params": {
+      "action_type": "verify_file",
+      "folder": "{{desktop_path}}/agent_presentation"
+    },
+    "task_id": "verify_files",
+    "depends_on": "close_ppt",
+    "priority": "normal",
+    "timeout": 10,
+    "retry_count": 2
+  }
+]

@@ -11,12 +11,15 @@ from datetime import datetime
 from typing import Dict, Optional
 from pathlib import Path
 
-from exec_agent_config import Config
-from exec_agent_models import VisionResult
-from exec_agent_deps import (
-    PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE,
-    pyautogui, pytesseract, Image
-)
+# from backend.agents.execution_agent.core.exec_agent_config import Config
+# from backend.agents.execution_agent.core.exec_agent_models import VisionResult
+# from backend.agents.execution_agent.core.exec_agent_deps import (
+#     PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE,
+#     pyautogui, pytesseract, Image
+# )
+from core.exec_agent_config import Config
+from core.exec_agent_models import VisionResult
+from core.exec_agent_deps import PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE, pyautogui, pytesseract, Image
 
 
 class VisionLayer:

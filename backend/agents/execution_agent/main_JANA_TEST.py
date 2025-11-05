@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
-from exec_agent_main import ExecutionAgent
+from backend.agents.execution_agent.core.exec_agent_main import ExecutionAgent
 
 # Configure logging
 logging.basicConfig(

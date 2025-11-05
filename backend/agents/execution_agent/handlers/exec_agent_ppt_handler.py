@@ -10,10 +10,13 @@ import time
 import os
 from typing import List, Dict
 
-from exec_agent_config import Config
-from exec_agent_models import ExecutionTask, ExecutionResult
-from exec_agent_config import ActionStatus
+# from backend.agents.execution_agent.core.exec_agent_config import Config
+# from backend.agents.execution_agent.core.exec_agent_models import ExecutionTask, ExecutionResult
+# from backend.agents.execution_agent.core.exec_agent_config import ActionStatus
 from datetime import datetime
+
+from core.exec_agent_config import Config,ActionStatus
+from core.exec_agent_models import ExecutionTask, ExecutionResult
 
 
 class PowerPointHandler:
