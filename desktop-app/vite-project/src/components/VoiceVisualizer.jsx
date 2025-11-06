@@ -37,8 +37,8 @@ const VoiceVisualizer = ({ t, glowColor, pulseColor }) => {
                 }
                 .visualizer-base {
                     position: relative;
-                    width: 200px;
-                    height: 200px;
+                    width: 100px;
+                    height: 100px;
                     border-radius: 50%;
                     background-color: transparent;
                     filter: saturate(1.5) contrast(1.2);
@@ -46,7 +46,7 @@ const VoiceVisualizer = ({ t, glowColor, pulseColor }) => {
                 .visualizer-base::before {
                     content: '';
                     position: absolute;
-                    inset: 10px;
+                    inset: 5px;
                     border-radius: 50%;
                     /* 2. Core Effect: Liquid Flow */
                     background: radial-gradient(

@@ -11,9 +11,9 @@ from typing import Tuple
 
 # from backend.agents.execution_agent.core.exec_agent_config import Config
 # from backend.agents.execution_agent.core.exec_agent_deps import PYAUTOGUI_AVAILABLE, pyautogui
-from core.exec_agent_config import Config, ActionStatus, StatusCode
-from core.exec_agent_models import ExecutionTask, ExecutionResult, VisionResult
-from core.exec_agent_deps import PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE, pyautogui, pytesseract, Image
+from ..core.exec_agent_config import Config, ActionStatus, StatusCode
+from ..core.exec_agent_models import ExecutionTask, ExecutionResult, VisionResult
+from ..core.exec_agent_deps import PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE, pyautogui, pytesseract, Image
 class ActionLayer:
     """
     Executes physical interactions: click, type, scroll, etc.

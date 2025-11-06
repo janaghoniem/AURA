@@ -15,9 +15,18 @@ from datetime import datetime
 # from core import ExecutionAgent, ExecutionTask, ExecutionResult, ExecutionContext, ActionStatus
 # from strategies import LocalStrategy, WebStrategy, SystemStrategy
 
-from core.exec_agent_main import ExecutionAgent
+## ADDED BY JANA BEGIN
+import asyncio
+import logging
+from agents.utils.protocol import Channels
+from agents.utils.broker import broker
+
+logger = logging.getLogger(__name__)
+## ADDED BY JANA END
+
+from .core.exec_agent_main import ExecutionAgent
 # from core.exec_agent_models import ExecutionResult, ExecutionTask, ExecutionResult, ExecutionContext, ActionStatus
-from strategies.local_strategy import LocalStrategy
+from .strategies.local_strategy import LocalStrategy
 
 def replace_placeholders(obj, context, **kwargs):
     """Recursively replace {{key}} placeholders with context values"""
@@ -183,60 +192,87 @@ def execute_single_task(agent, task_file: str):
     return result
 
 
-if __name__ == "__main__":
-    import sys
-    
+async def start_execution_agent(broker):
+
     agent = ExecutionAgent()
-    
-    # Parse command-line arguments
-    workflow_kwargs = {}
-    file_path = None
-    
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        if arg in ["--topic", "-t"] and i + 1 < len(sys.argv):
-            workflow_kwargs["research_topic"] = sys.argv[i + 1]
-            i += 2
-        elif arg in ["--report-name", "-r"] and i + 1 < len(sys.argv):
-            workflow_kwargs["report_name"] = sys.argv[i + 1]
-            i += 2
-        elif not arg.startswith("--") and not arg.startswith("-"):
-            file_path = arg
-            i += 1
-        else:
-            i += 1
-    
-    # Determine which file to use
-    if not file_path:
-        # Check for workflow files first, then task.json
-        workflow_files = ["research_report_workflow.json", "search_save_workflow.json", "workflow.json"]
-        task_file = "task.json"
+
+    async def handle_execution_request(message: dict):
+        """Handle execution request from Coordinator"""
+        task_id = message.get("task_id", "unknown")
+        logger.info(f"Executing: {task_id}")
+        logger.info(f"Message: {message}")
         
-        if any(os.path.exists(f) for f in workflow_files):
-            file_path = next(f for f in workflow_files if os.path.exists(f))
-        elif os.path.exists(task_file):
-            file_path = task_file
-        else:
-            print("Error: No task or workflow file found!")
-            print("   Available options:")
-            print("   - task.json (single task)")
-            print("   - workflow.json (workflow)")
-            print("   - search_save_workflow.json (search & save workflow)")
-            print("   - research_report_workflow.json (research report workflow)")
-            print("\n   Usage:")
-            print("     python Coordinator.py [file.json] [--topic \"your topic\"] [--report-name \"ReportName\"]")
-            sys.exit(1)
+        result = agent.execute_from_dict(message)
+        
+        # Add task_id to result
+        result["task_id"] = task_id
+        
+        # Publish result back to coordinator
+        await broker.publish(Channels.EXECUTION_TO_COORDINATOR, result)
     
-    if not os.path.exists(file_path):
-        print(f"Error: File not found: {file_path}")
-        sys.exit(1)
+    # Subscribe to execution requests
+    broker.subscribe(Channels.COORDINATOR_TO_EXECUTION, handle_execution_request)
     
-    # Determine if it's a workflow or single task
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    logger.info("✅ Execution Agent started")
     
-    if isinstance(data, list):
-        execute_workflow(agent, file_path, **workflow_kwargs)
-    else:
-        execute_single_task(agent, file_path)
+    while True:
+        await asyncio.sleep(1)
+
+
+# if __name__ == "__main__":
+#     import sys
+    
+#     agent = ExecutionAgent()
+    
+#     # Parse command-line arguments
+#     workflow_kwargs = {}
+#     file_path = None
+    
+#     i = 1
+#     while i < len(sys.argv):
+#         arg = sys.argv[i]
+#         if arg in ["--topic", "-t"] and i + 1 < len(sys.argv):
+#             workflow_kwargs["research_topic"] = sys.argv[i + 1]
+#             i += 2
+#         elif arg in ["--report-name", "-r"] and i + 1 < len(sys.argv):
+#             workflow_kwargs["report_name"] = sys.argv[i + 1]
+#             i += 2
+#         elif not arg.startswith("--") and not arg.startswith("-"):
+#             file_path = arg
+#             i += 1
+#         else:
+#             i += 1
+    
+#     # Determine which file to use
+#     if not file_path:
+#         # Check for workflow files first, then task.json
+#         workflow_files = ["research_report_workflow.json", "search_save_workflow.json", "workflow.json"]
+#         task_file = "task.json"
+        
+#         if any(os.path.exists(f) for f in workflow_files):
+#             file_path = next(f for f in workflow_files if os.path.exists(f))
+#         elif os.path.exists(task_file):
+#             file_path = task_file
+#         else:
+#             print("Error: No task or workflow file found!")
+#             print("   Available options:")
+#             print("   - task.json (single task)")
+#             print("   - workflow.json (workflow)")
+#             print("   - search_save_workflow.json (search & save workflow)")
+#             print("   - research_report_workflow.json (research report workflow)")
+#             print("\n   Usage:")
+#             print("     python Coordinator.py [file.json] [--topic \"your topic\"] [--report-name \"ReportName\"]")
+#             sys.exit(1)
+    
+#     if not os.path.exists(file_path):
+#         print(f"Error: File not found: {file_path}")
+#         sys.exit(1)
+    
+#     # Determine if it's a workflow or single task
+#     with open(file_path, "r", encoding="utf-8") as f:
+#         data = json.load(f)
+    
+#     if isinstance(data, list):
+#         execute_workflow(agent, file_path, **workflow_kwargs)
+#     else:
+#         execute_single_task(agent, file_path)

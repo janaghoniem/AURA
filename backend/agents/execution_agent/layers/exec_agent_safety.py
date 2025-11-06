@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, List
 
 # from backend.agents.execution_agent.core.exec_agent_config import Config, RiskLevel
-from core.exec_agent_config import Config, RiskLevel, StatusCode
+from ..core.exec_agent_config import Config, RiskLevel, StatusCode
 
 
 class SafetyLayer:

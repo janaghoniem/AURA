@@ -20,15 +20,15 @@ from typing import List
 #     Application, webdriver, By, WebDriverWait, EC
 # )
 
-from core.exec_agent_config import Config, ActionStatus, StatusCode, ExecutionContext
-from core.exec_agent_models import ExecutionTask, ExecutionResult
-from core.exec_agent_deps import(
+from ..core.exec_agent_config import Config, ActionStatus, StatusCode, ExecutionContext
+from ..core.exec_agent_models import ExecutionTask, ExecutionResult
+from ..core.exec_agent_deps import(
     PYWINAUTO_AVAILABLE, SELENIUM_AVAILABLE,
     Application, webdriver, By, WebDriverWait, EC
 )
-from layers.exec_agent_vision import VisionLayer
-from layers.exec_agent_action import ActionLayer
-from layers.exec_agent_safety import SafetyLayer
+from ..layers.exec_agent_vision import VisionLayer
+from ..layers.exec_agent_action import ActionLayer
+from ..layers.exec_agent_safety import SafetyLayer
 
 
 

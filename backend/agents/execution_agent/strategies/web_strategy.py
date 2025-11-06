@@ -13,10 +13,10 @@ from typing import List
 #     Application, webdriver, By, WebDriverWait, EC
 # )
 # ✅ CORRECT:
-from core.exec_agent_config import Config, ActionStatus, StatusCode
-from core.exec_agent_models import ExecutionTask, ExecutionResult
-from layers.exec_agent_safety import SafetyLayer
-from core.exec_agent_deps import SELENIUM_AVAILABLE, webdriver, By, WebDriverWait, EC
+from ..core.exec_agent_config import Config, ActionStatus, StatusCode
+from ..core.exec_agent_models import ExecutionTask, ExecutionResult
+from ..layers.exec_agent_safety import SafetyLayer
+from ..core.exec_agent_deps import SELENIUM_AVAILABLE, webdriver, By, WebDriverWait, EC
 
 
 

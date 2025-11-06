@@ -14,8 +14,8 @@ from pathlib import Path
     
 # from core import ExecutionTask, ExecutionResult, Config, ActionStatus, StatusCode
 
-from core.exec_agent_config import Config, ActionStatus, StatusCode
-from core.exec_agent_models import ExecutionTask, ExecutionResult
+from ..core.exec_agent_config import Config, ActionStatus, StatusCode
+from ..core.exec_agent_models import ExecutionTask, ExecutionResult
 
 
 def setup_logging(name="ExecutionAgent", log_level=None):

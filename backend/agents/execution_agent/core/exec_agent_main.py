@@ -27,13 +27,13 @@ from .exec_agent_models import ExecutionTask, ExecutionResult
 from .exec_agent_deps import check_dependencies
 
 # Import from other packages
-from layers.exec_agent_vision import VisionLayer
-from layers.exec_agent_action import ActionLayer
-from layers.exec_agent_safety import SafetyLayer
-from strategies.local_strategy import LocalStrategy
-from strategies.web_strategy import WebStrategy
-from strategies.system_strategy import SystemStrategy
-from utils import setup_logging
+from ..layers.exec_agent_vision import VisionLayer
+from ..layers.exec_agent_action import ActionLayer
+from ..layers.exec_agent_safety import SafetyLayer
+from ..strategies.local_strategy import LocalStrategy
+from ..strategies.web_strategy import WebStrategy
+from ..strategies.system_strategy import SystemStrategy
+from ..utils import setup_logging
 
 class ExecutionAgent:
     """
@@ -43,7 +43,7 @@ class ExecutionAgent:
     """
     
     def __init__(self, log_level=None):
-        """
+        """ 
         Initialize Execution Agent
         
         Args:

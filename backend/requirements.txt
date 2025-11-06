@@ -1,0 +1,38 @@
+# Core framework
+fastapi
+uvicorn
+
+# Environment management
+python-dotenv
+
+# HTTP requests & async utilities
+httpx
+requests
+aiohttp
+
+# LLM and AI integrations
+langchain
+langchain-core>=1.0.0
+langchain-community
+langchain-google-genai
+google-generativeai
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+protobuf
+grpcio
+grpcio-status
+
+# Data handling and utilities
+pydantic
+typing-extensions
+jsonschema
+
+# Optional (for pub/sub or messaging between agents)
+redis
+asyncio
+
+# For testing and development
+pytest
+pytest-asyncio

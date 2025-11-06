@@ -17,9 +17,9 @@ from pathlib import Path
 #     PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE,
 #     pyautogui, pytesseract, Image
 # )
-from core.exec_agent_config import Config
-from core.exec_agent_models import VisionResult
-from core.exec_agent_deps import PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE, pyautogui, pytesseract, Image
+from ..core.exec_agent_config import Config
+from ..core.exec_agent_models import VisionResult
+from ..core.exec_agent_deps import PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE, pyautogui, pytesseract, Image
 
 
 class VisionLayer:
