@@ -161,18 +161,32 @@ async def transcribe_audio(request: Request):
             logger.info("✅ File is ACTIVE, starting transcription")
 
             # Generate transcript
-            prompt = """
-You are a precise speech transcription system.
+            prompt = prompt = """
+You are a speech transcription system designed for bilingual users (Arabic and English).
 
-Task:
-- Listen carefully to the provided audio and produce an accurate transcript of any spoken words.
-- If the audio is silent, unclear, incomplete, or contains no meaningful speech, respond exactly with:
-  "Couldn’t catch that. Please try again."
-Rules:
-- Do NOT add explanations, punctuation that wasn’t spoken, or filler text.
-- Do NOT make up or guess what might have been said.
-- Output ONLY the final text transcription, with no extra words or formatting.
+Your task:
+1. Accurately transcribe the audio exactly as spoken.
+2. The speech may contain a mix of Arabic and English words.
+3. If the speaker mentions a command such as "open calculator", "open WhatsApp", "افتح calculator", etc.:
+   - Detect the app or command name, even if the rest of the sentence is Arabic.
+   - Keep the **app or command name in English**, exactly as said (for example: "افتح calculator").
+4. Do NOT translate any Arabic words.
+5. Do NOT invent or guess missing words.
+6. If the audio is silent, unclear, or contains no recognizable speech, respond exactly with:
+   "Couldn’t catch that. Please try again."
+
+Formatting rules:
+- Return ONLY the final transcript text, nothing else.
+- No punctuation or additional commentary.
+- Keep mixed-language sentences exactly as spoken.
+
+Examples:
+Arabic only → "افتح الكاميرا"
+Mixed → "افتح calculator"
+English → "open calendar"
+Silent → "Couldn’t catch that. Please try again."
 """
+
 
             response = genai_client.models.generate_content(
                 model="gemini-2.0-flash-exp",
