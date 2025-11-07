@@ -331,17 +331,18 @@ async def process_user_input(request: Request):
         
         # Create message
         if is_clarification:
-            # Clarification response
+            # Clarification response - use "answer" key
             message = AgentMessage(
                 message_type=MessageType.CLARIFICATION_RESPONSE,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"answer": user_input}
+                payload={"answer": user_input, "input": user_input}  # Include both for compatibility
             )
             logger.info(f"💬 Created clarification response message")
+            logger.info(f"💬 Payload: {message.payload}")
         else:
-            # New task request
+            # New task request - use "input" key
             message = AgentMessage(
                 message_type=MessageType.TASK_REQUEST,
                 sender=AgentType.LANGUAGE,
@@ -350,6 +351,7 @@ async def process_user_input(request: Request):
                 payload={"input": user_input}
             )
             logger.info(f"📋 Created task request message")
+            logger.info(f"📋 Payload: {message.payload}")
         
         # IMPORTANT: Register pending response BEFORE publishing
         logger.info(f"⏳ Creating pending response for message ID: {message.message_id}")

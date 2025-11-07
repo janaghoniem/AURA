@@ -248,6 +248,7 @@ function App() {
   const processText = async (text) => {
     try {
       console.log("📤 Processing:", text);
+      console.log("🔑 Is clarification response:", !!clarificationResponseToId);
       console.log("🔑 Clarification ID:", clarificationResponseToId);
 
       const response = await fetch('http://localhost:8000/process', {
@@ -257,6 +258,7 @@ function App() {
           session_id: sessionId,
           input: text,
           is_clarification: !!clarificationResponseToId,
+          clarification_id: clarificationResponseToId || null,
         }),
       });
 
@@ -268,6 +270,7 @@ function App() {
         if (data.status === "clarification_needed") {
           // Clarification required
           console.log("❓ Clarification needed:", data.question);
+          console.log("🆔 Setting clarification ID to:", data.response_id);
           setClarificationResponseToId(data.response_id);
           addMessage('assistant', data.question, 'clarification needed', true);
           
@@ -278,6 +281,7 @@ function App() {
         } else if (data.status === "completed") {
           // Task completed
           console.log("✅ Task completed:", data);
+          console.log("🧹 Clearing clarification ID");
           
           // Extract text from response
           let responseText = "";
@@ -303,6 +307,7 @@ function App() {
         } else {
           // Other response
           console.log("📄 Other response type:", data.status);
+          console.log("🧹 Clearing clarification ID");
           const responseText = data.text || data.response || data.payload?.text || JSON.stringify(data);
           console.log("📝 Response text:", responseText);
           
@@ -317,11 +322,13 @@ function App() {
         console.error("❌ Error response from server");
         const errorMsg = data.detail || data.error || 'Server error';
         addMessage('assistant', `❌ Error: ${errorMsg}`, 'error');
+        setClarificationResponseToId(null);
       }
     } catch (error) {
       console.error("❌ Process error:", error);
       console.error("❌ Error stack:", error.stack);
       addMessage('assistant', '❌ Network error: Could not connect to backend', 'error');
+      setClarificationResponseToId(null);
     } finally {
       setIsLoading(false);
       setUserInput("");
