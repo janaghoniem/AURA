@@ -161,7 +161,19 @@ async def transcribe_audio(request: Request):
             logger.info("✅ File is ACTIVE, starting transcription")
 
             # Generate transcript
-            prompt = "Generate a transcript of the speech. Return ONLY the transcript text, nothing else."
+            prompt = """
+You are a precise speech transcription system.
+
+Task:
+- Listen carefully to the provided audio and produce an accurate transcript of any spoken words.
+- If the audio is silent, unclear, incomplete, or contains no meaningful speech, respond exactly with:
+  "Couldn’t catch that. Please try again."
+Rules:
+- Do NOT add explanations, punctuation that wasn’t spoken, or filler text.
+- Do NOT make up or guess what might have been said.
+- Output ONLY the final text transcription, with no extra words or formatting.
+"""
+
             response = genai_client.models.generate_content(
                 model="gemini-2.0-flash-exp",
                 contents=[prompt, uploaded_file]
