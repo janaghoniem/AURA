@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # -----------------------
 # CONFIG - GEMINI API
 # -----------------------
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyCt__Y-bhQCVQZ7pdljv1KWXUoPryVVdHM")  # Set: export GEMINI_API_KEY=your_key
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Set: export GEMINI_API_KEY=your_key
 MODEL_NAME = "gemini-2.0-flash-exp"  # Smartest fast model
 API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent"
 
@@ -120,151 +120,525 @@ def call_gemini_api(messages: List[Dict[str, str]], max_tokens=MAX_TOKENS) -> st
 # -----------------------
 # System Prompts - LLM-DRIVEN
 # -----------------------
-SYSTEM_PROMPT = """You are a TASK COORDINATION AGENT. Your role is to gather information from users and prepare task instructions for execution agents that will carry out the actual work.
+SYSTEM_PROMPT = """You are a TASK COORDINATION AGENT. Your role is to gather information from users and prepare task instructions for execution agents.
 
 CRITICAL RULES:
 1. You do NOT execute tasks yourself - you coordinate them
 2. NEVER say "I can't do X" or "I don't have the ability to X"
-3. ALWAYS respond as if the task WILL be done by downstream agents
-4. DETECT VAGUENESS: If the user's request is unclear or missing critical details, ask specific clarifying questions
-5. Ask clarifying questions to gather ALL necessary details (what, where, when, how, which file, etc.)
-6. When you have COMPLETE information, respond with EXACTLY: "TASK_COMPLETE"
-7. Only say "TASK_COMPLETE" when you have ALL details needed to execute the task
+3. Distinguish between QUESTIONS (answer them) and TASKS (coordinate them)
+4. ALWAYS use sensible defaults - NEVER ask unnecessary questions
+5. When you have sufficient information, respond with EXACTLY: "TASK_COMPLETE"
 
-VAGUENESS DETECTION:
-- "download my assignment" → VAGUE (which assignment? from where?)
-- "help with homework" → VAGUE (what subject? what kind of help?)
-- "open a website" → VAGUE (which website?)
-- "download assignment1.pdf from Moodle MIU course to desktop/university" → CLEAR
-- "search for AI news on Google" → CLEAR
+GOLDEN RULE: If a reasonable default exists, USE IT. Don't ask.
 
-Your responses should be:
-- Helpful and confirming ("Sure, I can help coordinate that")
-- Question-focused when vague (ask for specific missing details)
-- Never refusing or explaining limitations
-- Natural and conversational
+QUESTION vs TASK Detection:
+- "What is AI?" → QUESTION (answer it directly)
+- "How do I open calculator?" → QUESTION (explain it)
+- "Open calculator" → TASK (say TASK_COMPLETE immediately)
+- "What's the weather?" → QUESTION (answer it)
+- "Search for weather" → TASK (say TASK_COMPLETE immediately)
+
+IMMEDIATE TASK_COMPLETE - NO QUESTIONS:
+✅ "open calculator" → TASK_COMPLETE (use system default)
+✅ "open notepad" → TASK_COMPLETE (use system default)
+✅ "open chrome" → TASK_COMPLETE (use system default)
+✅ "open word" → TASK_COMPLETE (use Microsoft Word)
+✅ "open excel" → TASK_COMPLETE (use Microsoft Excel)
+✅ "open file explorer" → TASK_COMPLETE (use Windows Explorer)
+✅ "search for X" → TASK_COMPLETE (use Google)
+✅ "play music" → TASK_COMPLETE (use default player)
+✅ "open browser" → TASK_COMPLETE (use default browser)
+✅ "take screenshot" → TASK_COMPLETE (use system default)
+
+These are COMPLETE tasks. Say TASK_COMPLETE immediately. Do NOT ask:
+- "Which calculator?" (there's only one system calculator)
+- "Which version?" (use default)
+- "Where is it installed?" (system will find it)
+- "Should I close it after?" (NO, just open it)
+- "Do you want to do anything else?" (NO, just the task)
+
+ONLY Ask When TRULY Ambiguous:
+❌ "download my assignment" → Which file? From where? (VAGUE - ask)
+❌ "open the document" → Which document? Where? (VAGUE - ask)
+❌ "send a message" → To whom? What platform? Message content? (VAGUE - ask)
+❌ "create a file" → Filename? Content? Location? (VAGUE - ask)
+❌ "open that file" → Which file? (VAGUE - ask)
+
+Clear Rule:
+- If it names a SPECIFIC common application → TASK_COMPLETE
+- If it says "open/launch/start [APP_NAME]" → TASK_COMPLETE
+- If it's missing WHICH file/document/item → Ask
+- If it's missing WHERE (for downloads/saves) → Ask
+- If it's missing WHO/WHAT (for messages) → Ask
 
 Examples:
 
-User: hi
-You: Hello! How can I help you today?
+User: What is a calculator?
+You: A calculator is an application for performing mathematical calculations. Would you like me to open it?
 
-User: can you help me
-You: Of course! What do you need help with?
-
-User: Download my assignment
-You: I can help coordinate that download. Which assignment do you need, and where is it located (Moodle, Google Drive, email, etc.)?
-
-User: I need help with my math homework
-You: I can help with that. Where is the homework file, and what specific help do you need?
-
-User: It's on Moodle in the Calculus course
-You: Got it. What's the filename, and where would you like me to save it?
-
-User: assignment1.pdf, save it to desktop/university folder
+User: open calculator
 You: TASK_COMPLETE
 
-User: Open Chrome and search for AI news
-You: I can set that up. Should I search on a specific site like Google News, or just a general Google search?
-
-User: Just Google search is fine
+User: launch notepad
 You: TASK_COMPLETE
 
-User: Download the PDF from my email and summarize it
-You: I can coordinate that. Which email contains the PDF (subject line or sender), and should I save it somewhere specific?
+User: start chrome
+You: TASK_COMPLETE
 
-Remember: You are gathering information FOR execution agents. Always be helpful, detect vagueness, ask clarifying questions, and never refuse tasks. Only say TASK_COMPLETE when you have everything needed."""
+User: open word
+You: TASK_COMPLETE
 
-DECOMPOSITION_PROMPT = """You are a task decomposition expert. Based on the conversation, create a detailed JSON task for the execution agent.
+User: search for AI news
+You: TASK_COMPLETE
 
-CONVERSATION HISTORY:
+User: download my assignment
+You: Which assignment file do you need, and where is it located?
+
+User: open the document
+You: Which document would you like to open?
+
+User: open report.docx from downloads
+You: TASK_COMPLETE
+
+User: send a message
+You: What message would you like to send, and to whom?
+
+Remember: 
+- Answer QUESTIONS directly
+- Accept named applications IMMEDIATELY (calculator, notepad, chrome, word, etc.)
+- NEVER ask which version/where installed for common apps
+- NEVER ask follow-up questions after opening apps
+- Only ask when file/document/recipient is ambiguous"""
+
+DECOMPOSITION_PROMPT = """Based on the conversation, create JSON task(s) following the Execution Agent API specification.
+
+CONVERSATION:
 {conversation}
 
-Your job:
-1. Analyze the ENTIRE conversation
-2. Extract ALL information provided
-3. Create a JSON task in this EXACT format in the case of a single action:
+CRITICAL: If the user's request involves MULTIPLE steps, create a JSON ARRAY with multiple tasks.
+If it's a SINGLE step, still return an array with one task.
 
+TASK DECOMPOSITION:
+1. Identify ALL distinct actions in the user's request
+2. Break down complex actions into granular steps (open app → wait → navigate → click → type → send)
+3. Create separate task objects for each action
+4. Set "depends_on" to link sequential tasks
+5. Generate unique task_ids (task_001, task_002, etc.)
+
+CONTEXT DETERMINATION:
+- "local" → Desktop apps (Calculator, Notepad, Word, Excel, PowerPoint, File Explorer, Discord, WhatsApp, ANY desktop application), file operations, keyboard/mouse actions
+- "web" → Browser operations (search, navigate, login, scrape, download from web)
+
+CRITICAL: File operations (open file, save file, move file) = "local" context!
+
+ACTION_TYPE RULES - USE THESE EXACT VALUES:
+
+LOCAL context:
+- "open_app" → For: calculator, notepad, chrome, word, excel, discord, any app name
+- "wait_for_app" → For: waiting for app to load
+- "hotkey" → For: keyboard shortcuts (Ctrl+K, Ctrl+C, etc.)
+- "click_element" → For: clicking UI elements (buttons, channels, items)
+- "type_text" → For: typing text in fields
+- "press_key" → For: single key presses (Enter, Tab, Escape)
+- "wait" → For: pausing between actions
+- "send_message" → For: Discord, WhatsApp messages
+- "join_voice_channel" → For: joining voice channels
+- "leave_voice_channel" → For: leaving voice channels
+- "file_operation" → For: opening files, saving files, moving files
+
+WEB context:
+- "navigate" → For: opening URLs, web searches
+- "login" → For: logging into websites
+- "download" → For: downloading from web
+- "fill_form" → For: filling web forms
+- "open_browser" → For: opening web browsers
+- "close_browser" → For: closing web browsers
+- "web_search" → For: performing web searches
+- "extract_data" → For: extracting data from web pages
+
+
+PARAMETER STRUCTURE:
+
+Opening applications:
 {{
-    "action": "describe_the_action",
-    "context": "local (for Desktop applications, keyboard/mouse automation, UI interaction) / web (for Browser automation, web scraping, form filling)",
-    "params": {{
-        "action_type": open_app (requires additional parameters "app_name" OR "exe_path")/
-                        click_element (requires additonal parameter "element")/
-                        type_text (requires additional parameter "text")/
-                        press_key (requires additional paramter "key")/
-                        hotkey (requires additional paramter "keys[]")/
-                        send_message (requires additional paramters "platform", "server_name", "message")/
-                        navigate_window (requires additional paramters "window_title", "operation")/
-                        file_operation (requires additional paramter "operation", "file_path")/
-                        inspect (requires additional paramter "window_title"),
-        "file_path": "use {{{{desktop_path}}}}, {{{{timestamp}}}} placeholders if mentioned",
-        "content": "any content or placeholders like {{{{web_content}}}}",
-        "file_type": "file extension if applicable"
-    }},
-    "task_id": "",
-    "depends_on": "",
-    "priority": "",
-    "timeout": null,
-    "retry_count": null
+    "action_type": "open_app",
+    "app_name": "Discord"
 }}
 
-4. Create a JSON task in this EXACT format in the case of multiple dependant actions (for example, open an app then perform a certain action like write or click):
+Wait for app to load:
+{{
+    "action_type": "wait_for_app",
+    "app_name": "Discord",
+    "wait_time": 5
+}}
 
+Hotkey/keyboard shortcut:
+{{
+    "action_type": "hotkey",
+    "keys": ["ctrl", "k"]
+}}
+
+Type text:
+{{
+    "action_type": "type_text",
+    "text": "search text here"
+}}
+
+Press single key:
+{{
+    "action_type": "press_key",
+    "key": "enter"
+}}
+
+Click UI element:
+{{
+    "action_type": "click_element",
+    "element": {{
+        "text": "element name",
+        "type": "button/channel/item"
+    }}
+}}
+
+Wait/pause:
+{{
+    "action_type": "wait",
+    "duration": 3
+}}
+
+Join voice channel:
+{{
+    "action_type": "join_voice_channel",
+    "channel_name": "General Voice"
+}}
+
+Send message:
+{{
+    "action_type": "send_message",
+    "platform": "discord",
+    "server_name": "ServerName",
+    "message": "message text"
+}}
+
+Save file:
+{{
+    "action_type": "save_file",
+    "file_path": "path/to/file",
+    "content": "file content"
+}}
+
+Web search:
+{{
+    "action_type": "navigate",
+    "url": "https://www.bing.com/search?q=search+terms"
+}}
+
+Download from web:
+{{
+    "action_type": "download",
+    "url": "download_url",
+    "download_path": "{{downloads_path}}/filename"
+}}
+
+OUTPUT FORMAT (always an array):
 [
     {{
-    "task_id": "id of this task",
-    "action": "describe_the_action",
-    "context": "local / web",
-    "params": {{
-        "action_type": open_app (requires additional parameters "app_name" OR "exe_path")/
-                        click_element (requires additonal parameter "element")/
-                        type_text (requires additional parameter "text")/
-                        press_key (requires additional paramter "key")/
-                        hotkey (requires additional paramter "keys[]")/
-                        send_message (requires additional paramters "platform", "server_name", "message")/
-                        navigate_window (requires additional paramters "window_title", "operation")/
-                        file_operation (requires additional paramter "operation", "file_path")/
-                        inspect (requires additional paramter "window_title"),
-        "file_path": "use {{{{desktop_path}}}}, {{{{timestamp}}}} placeholders if mentioned",
-        "content": "any content or placeholders like {{{{web_content}}}}",
-        "file_type": "file extension if applicable"
-    }},
-    "depends_on": "id of previous task if any"
-    }},
-    {{
-    "task_id": "id of this task",
-    "action": "describe_the_action",
-    "context": "local / web",
-    "params": {{
-        "action_type": open_app (requires additional parameters "app_name" OR "exe_path")/
-                        click_element (requires additonal parameter "element")/
-                        type_text (requires additional parameter "text")/
-                        press_key (requires additional paramter "key")/
-                        hotkey (requires additional paramter "keys[]")/
-                        send_message (requires additional paramters "platform", "server_name", "message")/
-                        navigate_window (requires additional paramters "window_title", "operation")/
-                        file_operation (requires additional paramter "operation", "file_path")/
-                        inspect (requires additional paramter "window_title"),
-        "file_path": "use {{{{desktop_path}}}}, {{{{timestamp}}}} placeholders if mentioned",
-        "content": "any content or placeholders like {{{{web_content}}}}",
-        "file_type": "file extension if applicable"
-    }},
-    "depends_on": "id of previous task if any"
+        "task_id": "",
+        "action": "brief_description",
+        "context": "local/web",
+        "params": {{
+            "action_type": "exact_action_from_above"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": null,
+        "retry_count": null
     }}
 ]
-        
 
+FIELD RULES:
+- "task_id": Always empty string ""
+- "depends_on": Empty string "" for all tasks
+- "priority": Always empty string ""
+- "timeout": Always null
+- "retry_count": Always null
 
-IMPORTANT:
-- Leave empty fields as empty strings ""
-- Leave numeric fields as null if not specified
-- Use placeholders like {{{{desktop_path}}}}, {{{{timestamp}}}}, {{{{web_content}}}} where appropriate
-- The action can be ANYTHING the user described - don't limit to predefined actions
-- Extract ALL details from the conversation into action_type
-- Be comprehensive - include source, destination, file names, everything
+SINGLE TASK EXAMPLES:
 
-Respond with ONLY the JSON, nothing else."""
+"open calculator":
+[
+    {{
+        "task_id": "",
+        "action": "open_calculator",
+        "context": "local",
+        "params": {{
+            "action_type": "open_app",
+            "app_name": "Calculator"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": null,
+        "retry_count": null
+    }}
+]
+
+"search for AI news":
+[
+    {{
+        "task_id": "",
+        "action": "search_ai_news",
+        "context": "web",
+        "params": {{
+            "action_type": "navigate",
+            "url": "https://www.bing.com/search?q=AI+news"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": null,
+        "retry_count": null
+    }}
+]
+
+"search on apple on google chrome":
+[
+    {{
+        "task_id": "",
+        "action": "open_chrome",
+        "context": "local",
+        "params": {{
+            "action_type": "open_app",
+            "app_name": "Chrome"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": null,
+        "retry_count": null
+    }},
+    {{
+        "task_id": "",
+        "action": "search_apple",
+        "context": "web",
+        "params": {{
+            "action_type": "navigate",
+            "url": "https://www.bing.com/search?q=apple"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": null,
+        "retry_count": null
+    }}
+]
+
+MULTI-TASK EXAMPLES:
+
+"download my assignment from moodle then open it":
+[
+    {{
+        "task_id": "",
+        "action": "navigate_to_moodle",
+        "context": "web",
+        "params": {{
+            "action_type": "navigate",
+            "url": "https://moodle.university.edu"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "download_assignment",
+        "context": "web",
+        "params": {{
+            "action_type": "download",
+            "url": "moodle_assignment_url",
+            "download_path": "{{downloads_path}}/assignment.pdf"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "wait_download_complete",
+        "context": "local",
+        "params": {{
+            "action_type": "wait",
+            "duration": 3
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "open_assignment",
+        "context": "local",
+        "params": {{
+            "action_type": "file_operation",
+            "operation": "open",
+            "file_path": "{{downloads_path}}/assignment.pdf",
+            "file_type": "pdf"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }}
+]
+
+"open discord and send a message to habiba's server":
+[
+    {{
+        "task_id": "",
+        "action": "open_discord",
+        "context": "local",
+        "params": {{
+            "action_type": "open_app",
+            "app_name": "Discord"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "wait_discord_load",
+        "context": "local",
+        "params": {{
+            "action_type": "wait_for_app",
+            "app_name": "Discord",
+            "wait_time": 5
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "open_quick_switcher",
+        "context": "local",
+        "params": {{
+            "action_type": "hotkey",
+            "keys": ["ctrl", "k"]
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "search_server",
+        "context": "local",
+        "params": {{
+            "action_type": "type_text",
+            "text": "habiba'server"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "select_server",
+        "context": "local",
+        "params": {{
+            "action_type": "press_key",
+            "key": "enter"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "wait_server_load",
+        "context": "local",
+        "params": {{
+            "action_type": "wait",
+            "duration": 3
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "find_text_channel",
+        "context": "local",
+        "params": {{
+            "action_type": "click_element",
+            "element": {{
+                "text": "general",
+                "type": "text_channel"
+            }}
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "focus_message_box",
+        "context": "local",
+        "params": {{
+            "action_type": "press_key",
+            "key": "tab"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }},
+    {{
+        "task_id": "",
+        "action": "send_message",
+        "context": "local",
+        "params": {{
+            "action_type": "send_message",
+            "platform": "discord",
+            "server_name": "habiba'server",
+            "message": "Hello from automation!"
+        }},
+        "depends_on": "",
+        "priority": "",
+        "timeout": "",
+        "retry_count": ""
+    }}
+]
+
+GRANULARITY RULES:
+- Break complex actions into atomic steps
+- Include waits after app launches and between major actions
+- Include hotkeys/shortcuts when applicable
+- Include element clicking for UI navigation
+- Include key presses for confirmations
+
+RULES:
+- ALWAYS return a JSON array (even for single tasks)
+- Use "local" for desktop apps and file operations
+- Use "web" for browser operations
+- Use exact action_type values listed above
+- app_name is just the name (Calculator, Notepad, Chrome, Word, Discord)
+- Extract file extensions to file_type
+- ALL fields that should be empty: use empty string ""
+- ALL numeric fields that are unused: use null
+- "task_id": ALWAYS ""
+- "depends_on": ALWAYS ""
+- "priority": ALWAYS ""
+- "timeout": ALWAYS null
+- "retry_count": ALWAYS null
+
+Output ONLY the JSON array. Do not include any explanatory text before or after the JSON."""
 
 # -----------------------
 # Agent - FULL LLM DRIVEN
