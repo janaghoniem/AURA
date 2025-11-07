@@ -7,12 +7,16 @@ import logging
 import os
 import base64
 import tempfile
+import time
+import io
+import wave
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from google import genai
+from google.genai import types
 
 # Import broker and agents
 from agents.utils.broker import broker
@@ -92,6 +96,84 @@ app.add_middleware(
 # HTTP API Endpoints
 # ============================================================================
 
+@app.post("/text-to-speech")
+async def text_to_speech(request: Request):
+    """
+    Convert text to speech using Google Gemini TTS
+    
+    Returns base64-encoded WAV audio
+    """
+    try:
+        logger.info("🔊 Received TTS request")
+        
+        if not genai_client:
+            logger.error("❌ Google Genai client not initialized")
+            raise HTTPException(status_code=500, detail="TTS service not available - GOOGLE_API_KEY not set")
+        
+        data = await request.json()
+        text = data.get("text", "").strip()
+        voice_name = data.get("voice_name", "Gacrux")  # Default voice
+        
+        if not text:
+            logger.error("❌ No text provided for TTS")
+            raise HTTPException(status_code=400, detail="Missing 'text' field")
+        
+        logger.info(f"🗣️ Generating speech for text: '{text[:50]}...'")
+        logger.info(f"🎤 Using voice: {voice_name}")
+        
+        # Generate TTS
+        response = genai_client.models.generate_content(
+            model="gemini-2.5-flash-preview-tts",
+            contents=text,
+            config=types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=voice_name
+                        )
+                    )
+                ),
+            ),
+        )
+        
+        # Extract PCM bytes
+        pcm_data = response.candidates[0].content.parts[0].inline_data.data
+        logger.info(f"✅ TTS generated: {len(pcm_data)} bytes of PCM data")
+        
+        # Convert raw PCM to WAV in memory
+        rate = 24000  # Hz
+        channels = 1
+        sample_width = 2  # bytes (16-bit)
+        buffer = io.BytesIO()
+        
+        with wave.open(buffer, "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(sample_width)
+            wf.setframerate(rate)
+            wf.writeframes(pcm_data)
+        
+        buffer.seek(0)
+        wav_bytes = buffer.read()
+        
+        # Convert to base64
+        base64_audio = base64.b64encode(wav_bytes).decode('utf-8')
+        logger.info(f"✅ WAV created and encoded: {len(base64_audio)} base64 characters")
+        
+        return {
+            "status": "success",
+            "audio_data": base64_audio,
+            "format": "wav",
+            "sample_rate": rate
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ TTS error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
+
+
 @app.post("/transcribe")
 async def transcribe_audio(request: Request):
     """
@@ -142,17 +224,17 @@ async def transcribe_audio(request: Request):
             logger.info("⬆️ Uploading WAV audio to Google GenAI...")
             uploaded_file = genai_client.files.upload(file=temp_path)
             logger.info(f"✅ File uploaded: {uploaded_file.name}")
-            logger.info(f"📊 File state: {uploaded_file.state}")
+            logger.info(f"📊 File state immediately after upload: {uploaded_file.state.name}")
 
             # Wait for file to become ACTIVE
-            import time
             max_wait = 30  # seconds
             wait_time = 0
             while uploaded_file.state.name != "ACTIVE" and wait_time < max_wait:
-                logger.info(f"⏳ Waiting for file to become ACTIVE... (current state: {uploaded_file.state.name})")
+                logger.info(f"⏳ Waiting for file to become ACTIVE... (current state: {uploaded_file.state.name}, waited {wait_time}s)")
                 time.sleep(2)
                 wait_time += 2
                 uploaded_file = genai_client.files.get(name=uploaded_file.name)
+                logger.info(f"📊 File state after refresh: {uploaded_file.state.name}")
 
             if uploaded_file.state.name != "ACTIVE":
                 logger.error(f"❌ File failed to become ACTIVE after {max_wait}s. State: {uploaded_file.state.name}")
@@ -161,7 +243,7 @@ async def transcribe_audio(request: Request):
             logger.info("✅ File is ACTIVE, starting transcription")
 
             # Generate transcript
-            prompt = prompt = prompt = """
+            prompt = """
 You are a bilingual (Arabic + English) speech transcription system.
 
 Your goals:
@@ -172,7 +254,7 @@ Your goals:
    - Do not remove or replace any surrounding Arabic words.
 4. If the user is speaking casually or having a normal conversation, just transcribe it as-is.
 5. If the audio is silent, too noisy, or no words are detected, respond exactly with:
-   "Couldn’t catch that. Please try again."
+   "Couldn't catch that. Please try again."
 
 Formatting rules:
 - Output ONLY the raw transcript, nothing else.
@@ -184,9 +266,8 @@ Examples:
 - "افتح calculator" → "افتح calculator"
 - "I was just testing the mic" → "I was just testing the mic"
 - "افتح calculator بسرعة" → "افتح calculator بسرعة"
-- (silent audio) → "Couldn’t catch that. Please try again."
+- (silent audio) → "Couldn't catch that. Please try again."
 """
-
 
             response = genai_client.models.generate_content(
                 model="gemini-2.0-flash-exp",
@@ -199,7 +280,8 @@ Examples:
                 logger.warning("⚠️ Transcription returned EMPTY text!")
                 transcript = "[Empty transcription - no speech detected]"
             else:
-                logger.info(f"✅ Transcription successful! 📝: {transcript}")
+                logger.info(f"✅ Transcription successful!")
+                logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
 
             # Clean up uploaded file
             try:
@@ -269,43 +351,50 @@ async def process_user_input(request: Request):
             )
             logger.info(f"📋 Created task request message")
         
-        # Publish to Language Agent
+        # IMPORTANT: Register pending response BEFORE publishing
+        logger.info(f"⏳ Creating pending response for message ID: {message.message_id}")
+        future = asyncio.Future()
+        pending_responses[message.message_id] = future
+        logger.info(f"📝 Registered pending response. Total pending: {len(pending_responses)}")
+        logger.info(f"📝 Pending IDs: {list(pending_responses.keys())}")
+        
+        # Now publish to Language Agent
         logger.info(f"📤 Publishing message to {Channels.LANGUAGE_INPUT}")
         await broker.publish(Channels.LANGUAGE_INPUT, message)
         
         # Wait for response (with timeout)
-        logger.info(f"⏳ Waiting for response (timeout: 30s)...")
-        response = await wait_for_response(message.message_id, timeout=30.0)
-        logger.info(f"✅ Response received: {response}")
-        
-        return response
+        logger.info(f"⏰ Waiting up to 60s for response...")
+        try:
+            response = await asyncio.wait_for(future, timeout=60.0)
+            logger.info(f"✅ Response received: {response}")
+            return response
+        except asyncio.TimeoutError:
+            logger.error(f"❌ TIMEOUT waiting for response to message: {message.message_id}")
+            logger.error(f"❌ Pending responses at timeout: {list(pending_responses.keys())}")
+            raise HTTPException(status_code=504, detail="Request timeout")
+        finally:
+            # Clean up
+            if message.message_id in pending_responses:
+                pending_responses.pop(message.message_id)
+                logger.info(f"🗑️ Cleaned up pending response: {message.message_id}")
     
     except asyncio.TimeoutError:
-        logger.error("❌ Request timeout - no response from agents")
+        logger.error("❌ Request timeout - already handled in main flow")
         raise HTTPException(status_code=504, detail="Request timeout")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error processing request: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def wait_for_response(message_id: str, timeout: float = 30.0):
-    """Wait for agent response"""
-    # Create a future to wait for
-    future = asyncio.Future()
-    pending_responses[message_id] = future
-    
-    try:
-        # Wait for response with timeout
-        response = await asyncio.wait_for(future, timeout=timeout)
-        return response
-    finally:
-        # Clean up
-        pending_responses.pop(message_id, None)
-
-
 async def handle_language_output(message: AgentMessage):
     """Handle output from Language Agent"""
     logger.info(f"📨 Received from Language Agent: {message.message_type}")
+    logger.info(f"📋 Message ID: {message.message_id}")
+    logger.info(f"📋 Response to: {message.response_to}")
+    logger.info(f"📋 Payload: {message.payload}")
+    logger.info(f"📋 Current pending responses: {list(pending_responses.keys())}")
     
     if message.message_type == MessageType.CLARIFICATION_REQUEST:
         # Clarification needed
@@ -319,16 +408,46 @@ async def handle_language_output(message: AgentMessage):
         
         # Resolve the future
         target_id = message.response_to
+        logger.info(f"🔍 Looking for pending response with ID: {target_id}")
+        
         if target_id and target_id in pending_responses:
-            logger.info(f"✅ Resolving pending request: {target_id}")
+            logger.info(f"✅ FOUND! Resolving pending request: {target_id}")
             pending_responses[target_id].set_result(response_content)
+            logger.info(f"✅ Response resolved successfully")
         else:
-            logger.warning(f"⚠️ No pending response found for: {target_id}")
+            logger.error(f"❌ NO PENDING RESPONSE FOUND for: {target_id}")
+            logger.error(f"❌ Available pending IDs: {list(pending_responses.keys())}")
+    
+    elif message.message_type == MessageType.TASK_RESPONSE:
+        # Direct task response from language agent
+        response_content = {
+            "status": "completed",
+            "text": message.payload.get("response", "Task completed"),
+            "task_id": message.task_id
+        }
+        
+        logger.info(f"✅ Task response from Language Agent: {response_content}")
+        
+        target_id = message.response_to
+        logger.info(f"🔍 Looking for pending response with ID: {target_id}")
+        
+        if target_id and target_id in pending_responses:
+            logger.info(f"✅ FOUND! Resolving pending request: {target_id}")
+            pending_responses[target_id].set_result(response_content)
+            logger.info(f"✅ Response resolved successfully")
+        else:
+            logger.error(f"❌ NO PENDING RESPONSE FOUND for: {target_id}")
+            logger.error(f"❌ Available pending IDs: {list(pending_responses.keys())}")
 
 
 async def handle_coordinator_output(message: AgentMessage):
     """Handle output from Coordinator"""
     logger.info(f"📨 Received from Coordinator: {message.message_type}")
+    logger.info(f"📋 Message ID: {message.message_id}")
+    logger.info(f"📋 Response to: {message.response_to}")
+    logger.info(f"📋 Task ID: {message.task_id}")
+    logger.info(f"📋 Payload: {message.payload}")
+    logger.info(f"📋 Current pending responses: {list(pending_responses.keys())}")
     
     if message.message_type == MessageType.TASK_RESPONSE:
         # Task completed
@@ -336,17 +455,33 @@ async def handle_coordinator_output(message: AgentMessage):
         response = {
             "status": "completed",
             "task_id": message.task_id,
+            "text": result.get("response", result.get("result", "Task completed")),
             "result": result
         }
         
         logger.info(f"✅ Task completed: {message.task_id}")
+        logger.info(f"📄 Response content: {response}")
         
-        # Find the original message ID
-        for msg_id, future in list(pending_responses.items()):
-            if not future.done():
-                logger.info(f"✅ Resolving pending request: {msg_id}")
-                future.set_result(response)
-                break
+        # Try to find by response_to first
+        target_id = message.response_to
+        logger.info(f"🔍 Looking for pending response with ID: {target_id}")
+        
+        if target_id and target_id in pending_responses:
+            logger.info(f"✅ FOUND by response_to! Resolving: {target_id}")
+            pending_responses[target_id].set_result(response)
+            logger.info(f"✅ Response resolved successfully")
+        else:
+            # Fallback: Find any pending response
+            logger.warning(f"⚠️ Target ID {target_id} not found, trying fallback...")
+            for msg_id, future in list(pending_responses.items()):
+                if not future.done():
+                    logger.info(f"✅ FALLBACK! Resolving pending request: {msg_id}")
+                    future.set_result(response)
+                    logger.info(f"✅ Response resolved via fallback")
+                    break
+            else:
+                logger.error(f"❌ NO PENDING RESPONSES FOUND AT ALL!")
+                logger.error(f"❌ Available pending IDs: {list(pending_responses.keys())}")
     
     elif message.message_type == MessageType.ERROR:
         # Error occurred
@@ -357,12 +492,23 @@ async def handle_coordinator_output(message: AgentMessage):
         }
         
         logger.error(f"❌ Error from coordinator: {response['error']}")
+        logger.info(f"📋 Current pending responses: {list(pending_responses.keys())}")
         
-        for msg_id, future in list(pending_responses.items()):
-            if not future.done():
-                logger.info(f"✅ Resolving pending request with error: {msg_id}")
-                future.set_result(response)
-                break
+        target_id = message.response_to
+        logger.info(f"🔍 Looking for pending response with ID: {target_id}")
+        
+        if target_id and target_id in pending_responses:
+            logger.info(f"✅ FOUND! Resolving with error: {target_id}")
+            pending_responses[target_id].set_result(response)
+        else:
+            logger.warning(f"⚠️ Target ID {target_id} not found, trying fallback...")
+            for msg_id, future in list(pending_responses.items()):
+                if not future.done():
+                    logger.info(f"✅ FALLBACK! Resolving pending request with error: {msg_id}")
+                    future.set_result(response)
+                    break
+            else:
+                logger.error(f"❌ NO PENDING RESPONSES FOUND AT ALL!")
 
 
 @app.post("/reset")
@@ -395,7 +541,8 @@ async def health_check():
         "service": "YUSR Unified Backend (Pub/Sub)",
         "version": "3.0.0",
         "broker": "running" if broker.running else "stopped",
-        "transcription": "available" if genai_client else "unavailable"
+        "transcription": "available" if genai_client else "unavailable",
+        "tts": "available" if genai_client else "unavailable"
     }
 
 
@@ -410,6 +557,7 @@ async def root():
         "endpoints": {
             "/process": "POST - Process user input",
             "/transcribe": "POST - Transcribe audio to text",
+            "/text-to-speech": "POST - Convert text to speech",
             "/reset": "POST - Reset conversation session",
             "/health": "GET - Service health check"
         },
