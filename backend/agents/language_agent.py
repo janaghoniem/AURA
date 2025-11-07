@@ -244,7 +244,6 @@ LOCAL context:
 - "send_message" → For: Discord, WhatsApp messages
 - "join_voice_channel" → For: joining voice channels
 - "leave_voice_channel" → For: leaving voice channels
-- "file_operation" → For: opening files, saving files, moving files
 
 WEB context:
 - "navigate" → For: opening URLs, web searches
