@@ -273,6 +273,7 @@ def create_coordinator_graph():
             # Handle clarification needed
             if plan.get("needs_clarification"):
                 return {
+                    "input": state["input"],
                     "clarification": plan["question"],
                     "status": "needs_clarification"
                 }
@@ -281,6 +282,7 @@ def create_coordinator_graph():
             if not plan.get("needs_decomposition"):
                 validated_task = validate_and_enhance_task(plan["enhanced_task"])
                 return {
+                    "input": state["input"],
                     "plan": {
                         "parallel": [],
                         "sequential": [validated_task.dict()]
@@ -290,6 +292,7 @@ def create_coordinator_graph():
             
             # Complex task (decomposed)
             return {
+                "input": state["input"],
                 "plan": plan,
                 "status": "ready"
             }
@@ -299,6 +302,7 @@ def create_coordinator_graph():
             logger.error(f"JSON parse error: {e}. Treating as simple task.")
             validated_task = validate_and_enhance_task(raw_task)
             return {
+                "input": state["input"],
                 "plan": {
                     "parallel": [],
                     "sequential": [validated_task.dict()]
@@ -435,7 +439,7 @@ async def start_coordinator_agent(broker_instance):
         logger.info(f"Coordinator got result: {message.get('status')}")
         
         # Forward to language/user
-        # await broker_instance.publish(Channels.COORDINATOR_OUTPUT, message)
+        await broker_instance.publish(Channels.COORDINATOR_TO_LANGUAGE, message)
     
     # Subscribe to channels
     broker_instance.subscribe(Channels.LANGUAGE_TO_COORDINATOR, handle_task_from_language)
