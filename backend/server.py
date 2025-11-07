@@ -161,30 +161,30 @@ async def transcribe_audio(request: Request):
             logger.info("✅ File is ACTIVE, starting transcription")
 
             # Generate transcript
-            prompt = prompt = """
-You are a speech transcription system designed for bilingual users (Arabic and English).
+            prompt = prompt = prompt = """
+You are a bilingual (Arabic + English) speech transcription system.
 
-Your task:
-1. Accurately transcribe the audio exactly as spoken.
-2. The speech may contain a mix of Arabic and English words.
-3. If the speaker mentions a command such as "open calculator", "open WhatsApp", "افتح calculator", etc.:
-   - Detect the app or command name, even if the rest of the sentence is Arabic.
-   - Keep the **app or command name in English**, exactly as said (for example: "افتح calculator").
-4. Do NOT translate any Arabic words.
-5. Do NOT invent or guess missing words.
-6. If the audio is silent, unclear, or contains no recognizable speech, respond exactly with:
+Your goals:
+1. Transcribe the audio exactly as spoken.
+2. Keep all Arabic and English words as-is. Do NOT translate or correct them.
+3. If a clear command or app name appears (e.g. "open calculator", "افتح calendar", "شغل music"):
+   - Keep the app or command name exactly in English as said.
+   - Do not remove or replace any surrounding Arabic words.
+4. If the user is speaking casually or having a normal conversation, just transcribe it as-is.
+5. If the audio is silent, too noisy, or no words are detected, respond exactly with:
    "Couldn’t catch that. Please try again."
 
 Formatting rules:
-- Return ONLY the final transcript text, nothing else.
-- No punctuation or additional commentary.
-- Keep mixed-language sentences exactly as spoken.
+- Output ONLY the raw transcript, nothing else.
+- Keep Arabic and English mixed sentences in their original order.
+- Do NOT add punctuation, translate, or summarize.
 
 Examples:
-Arabic only → "افتح الكاميرا"
-Mixed → "افتح calculator"
-English → "open calendar"
-Silent → "Couldn’t catch that. Please try again."
+- "افتح الكاميرا" → "افتح الكاميرا"
+- "افتح calculator" → "افتح calculator"
+- "I was just testing the mic" → "I was just testing the mic"
+- "افتح calculator بسرعة" → "افتح calculator بسرعة"
+- (silent audio) → "Couldn’t catch that. Please try again."
 """
 
 
