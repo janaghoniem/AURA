@@ -63,32 +63,42 @@ function AnimatedOrb({ state, onClick, isDisabled }) {
   );
 }
 
-// Message Bubble Component
+// Message Bubble Component with speech bubble tail
 function MessageBubble({ text, isUser }) {
   return (
-    <div className={`${isUser ? 'ml-auto' : 'mr-auto'} max-w-md`}>
-      <div className={`px-6 py-4 rounded-3xl backdrop-blur-xl ${
-        isUser 
-          ? 'bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/30' 
-          : 'bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/30'
-      }`}>
+    <div className={`${isUser ? 'ml-auto' : 'mr-auto'} max-w-md relative`}>
+      
+      
+      <div className="px-6 py-4 rounded-3xl backdrop-blur-xl bg-white/5 border border-white/10">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[10px] uppercase tracking-widest text-white/40 font-light">
+            {isUser ? 'You' : 'YUSR'}
+          </span>
+        </div>
         <p className="text-white/90 text-sm leading-relaxed">{text}</p>
       </div>
     </div>
   );
 }
 
-// Task Item Component
-function TaskItem({ task, index }) {
+// Task Item Component with checkbox
+function TaskItem({ task, onToggle, completed }) {
   return (
     <div className="group px-4 py-3 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all duration-300">
-      <div className="flex items-start gap-3">
-        <div className="flex-shrink-0 w-6 h-6 mt-0.5 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-xs text-white font-medium">
-          {index + 1}
-        </div>
-        <div className="flex-1">
-          <p className="text-white/80 text-sm leading-relaxed">{task}</p>
-        </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onToggle}
+          className="flex-shrink-0 w-5 h-5 rounded border-2 border-white/30 hover:border-white/50 transition-colors flex items-center justify-center"
+        >
+          {completed && (
+            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+            </svg>
+          )}
+        </button>
+        <p className={`text-white/80 text-sm leading-relaxed flex-1 ${completed ? 'line-through opacity-50' : ''}`}>
+          {task}
+        </p>
       </div>
     </div>
   );
@@ -96,14 +106,14 @@ function TaskItem({ task, index }) {
 
 // Main App Component
 function App() {
-  const [orbState, setOrbState] = useState('idle'); // idle, listening, processing, speaking
+  const [orbState, setOrbState] = useState('idle');
   const [userMessage, setUserMessage] = useState("Tap the orb to speak");
   const [assistantMessage, setAssistantMessage] = useState("I'm ready to help you");
   const [tasks, setTasks] = useState([
-    "Open calculator",
-    "Check the weather",
-    "Set a reminder"
+    { text: "Get Started!", completed: false },
+   
   ]);
+  const [newTaskInput, setNewTaskInput] = useState("");
   
   const [sessionId] = useState("test-123");
   const [clarificationResponseToId, setClarificationResponseToId] = useState(null);
@@ -114,16 +124,30 @@ function App() {
   const audioChunksRef = useRef([]);
   const audioRef = useRef(new Audio());
 
+  // Add new task
+  const handleAddTask = (e) => {
+    e.preventDefault();
+    if (newTaskInput.trim()) {
+      setTasks([...tasks, { text: newTaskInput.trim(), completed: false }]);
+      setNewTaskInput("");
+    }
+  };
+
+  // Toggle task completion
+  const handleToggleTask = (index) => {
+    setTasks(tasks.map((task, i) => 
+      i === index ? { ...task, completed: !task.completed } : task
+    ));
+  };
+
   // Handle orb click
   const handleOrbClick = async () => {
     if (orbState === 'processing' || orbState === 'speaking') return;
     
     if (orbState === 'idle' || orbState === 'listening') {
       if (!isRecording) {
-        // Start recording
         startRecording();
       } else {
-        // Stop recording and process
         stopRecording();
       }
     }
@@ -150,7 +174,6 @@ function App() {
         setAudioBlob(audioBlob);
         stream.getTracks().forEach(track => track.stop());
         
-        // Automatically process the audio
         processAudio(audioBlob);
       };
 
@@ -180,13 +203,11 @@ function App() {
       setUserMessage("Processing...");
       console.log("Transcribing audio...");
 
-      // Convert to base64
       const reader = new FileReader();
       reader.readAsDataURL(blob);
       reader.onloadend = async () => {
         const base64Audio = reader.result.split(',')[1];
         
-        // Transcribe
         const transcribeResponse = await fetch('http://localhost:8000/transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -200,7 +221,6 @@ function App() {
           console.log(`Transcribed: "${transcript}"`);
           setUserMessage(transcript);
           
-          // Process through agent
           await processText(transcript);
         } else {
           setAssistantMessage(`Transcription failed: ${transcribeData.detail}`);
@@ -241,7 +261,6 @@ function App() {
           setClarificationResponseToId(data.response_id);
           setAssistantMessage(data.question);
           
-          // Speak and play TTS
           await speakResponse(data.question);
           
         } else if (data.status === "completed") {
@@ -262,7 +281,6 @@ function App() {
           setAssistantMessage(responseText);
           setClarificationResponseToId(null);
           
-          // Speak and play TTS
           await speakResponse(responseText);
           
         } else {
@@ -273,7 +291,6 @@ function App() {
           setAssistantMessage(responseText);
           setClarificationResponseToId(null);
           
-          // Speak and play TTS
           await speakResponse(responseText);
         }
       } else {
@@ -291,10 +308,9 @@ function App() {
     }
   };
 
-  // Speak response with TTS
+  // Speak response with TTS - synced with orb animation
   const speakResponse = async (text) => {
     try {
-      setOrbState('speaking');
       console.log("Generating TTS for:", text);
 
       const response = await fetch('http://localhost:8000/text-to-speech', {
@@ -306,19 +322,42 @@ function App() {
       const data = await response.json();
 
       if (response.ok) {
-        console.log("TTS received, playing audio...");
+        console.log("TTS received, preparing audio...");
         
         const audioBlob = await fetch(`data:audio/wav;base64,${data.audio_data}`).then(r => r.blob());
         const audioUrl = URL.createObjectURL(audioBlob);
         
         audioRef.current.src = audioUrl;
+        
+        // Set speaking state ONLY when audio is ready to play
+        audioRef.current.oncanplaythrough = async () => {
+          console.log("Audio ready, starting playback...");
+          setOrbState('speaking');
+          
+          try {
+            await audioRef.current.play();
+            console.log("Audio playing now");
+          } catch (playError) {
+            console.error("Play error:", playError);
+            setOrbState('idle');
+          }
+        };
+        
         audioRef.current.onended = () => {
           URL.revokeObjectURL(audioUrl);
           setOrbState('idle');
           console.log("Audio playback finished");
         };
         
-        await audioRef.current.play();
+        audioRef.current.onerror = (error) => {
+          console.error("Audio error:", error);
+          URL.revokeObjectURL(audioUrl);
+          setOrbState('idle');
+        };
+        
+        // Load the audio
+        audioRef.current.load();
+        
       } else {
         console.error("TTS failed:", data.detail);
         setOrbState('idle');
@@ -330,7 +369,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white p-6 overflow-hidden">
+<div className="min-h-screen bg-[radial-gradient(circle_at_center,_black_0%,_purple-900_40%,_black_100%)] text-white p-6 overflow-hidden">
       <style>{`
         @keyframes spin-slow {
           from { transform: rotate(0deg); }
@@ -367,7 +406,7 @@ function App() {
 
       <div className="max-w-[1800px] mx-auto h-screen flex gap-6">
         {/* Main Interface - 80% */}
-        <div className="flex-[8] bg-gradient-to-br from-gray-900/50 to-gray-800/50 rounded-3xl backdrop-blur-xl border border-white/10 p-8 flex flex-col">
+        <div className="flex-[8] bg-white/[0.02] rounded-3xl backdrop-blur-xl border border-white/10 p-8 flex flex-col">
           {/* Header */}
           <div className="text-center mb-8">
             <h1 className="text-5xl font-light tracking-wider mb-2">YUSR</h1>
@@ -391,12 +430,35 @@ function App() {
         </div>
 
         {/* Tasks Panel - 20% */}
-        <div className="flex-[2] bg-gradient-to-br from-gray-900/50 to-gray-800/50 rounded-3xl backdrop-blur-xl border border-white/10 p-6 flex flex-col">
+        <div className="flex-[2] bg-white/[0.02] rounded-3xl backdrop-blur-xl border border-white/10 p-6 flex flex-col">
           <h2 className="text-xl font-light tracking-wide mb-6 text-white/80">Tasks</h2>
           
+          {/* Task Input */}
+          <form onSubmit={handleAddTask} className="mb-6">
+            <textarea
+              value={newTaskInput}
+              onChange={(e) => setNewTaskInput(e.target.value)}
+              placeholder="Add tasks (one per line)..."
+              className="w-full px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white placeholder-white/30 text-sm resize-none focus:outline-none focus:border-white/20 transition-colors"
+              rows="3"
+            />
+            <button
+              type="submit"
+              className="mt-2 w-full px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 text-sm transition-all duration-300"
+            >
+              Add Task
+            </button>
+          </form>
+          
+          {/* Task List */}
           <div className="flex-1 space-y-3 overflow-y-auto">
             {tasks.map((task, index) => (
-              <TaskItem key={index} task={task} index={index} />
+              <TaskItem 
+                key={index} 
+                task={task.text} 
+                completed={task.completed}
+                onToggle={() => handleToggleTask(index)}
+              />
             ))}
           </div>
 
