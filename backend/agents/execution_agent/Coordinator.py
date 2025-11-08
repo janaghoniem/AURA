@@ -10,6 +10,9 @@ Supports:
 import json
 import os
 from datetime import datetime
+from agents.utils.protocol import (
+    Channels, AgentMessage, MessageType, AgentType, ExecutionResult
+)
 # from backend.agents.execution_agent.core.exec_agent_main import ExecutionAgent
 
 # from core import ExecutionAgent, ExecutionTask, ExecutionResult, ExecutionContext, ActionStatus
@@ -192,26 +195,47 @@ def execute_single_task(agent, task_file: str):
     return result
 
 
-async def start_execution_agent(broker):
-
+async def start_execution_agent(broker_instance):
+    """Start Execution Agent with proper message handling"""
+    
     agent = ExecutionAgent()
 
-    async def handle_execution_request(message: dict):
+    async def handle_execution_request(message: AgentMessage):
         """Handle execution request from Coordinator"""
-        task_id = message.get("task_id", "unknown")
+        
+        # Extract task info
+        task_id = message.task_id or "unknown"
+        task_payload = message.payload
+        
         logger.info(f"Executing: {task_id}")
-        logger.info(f"Message: {message}")
+        logger.info(f"Task payload: {task_payload}")
         
-        result = agent.execute_from_dict(message)
+        # Execute the task
+        result_dict = agent.execute_from_dict(task_payload)
         
-        # Add task_id to result
-        result["task_id"] = task_id
+        # Create proper AgentMessage response
+        response_msg = AgentMessage(
+            message_type=MessageType.EXECUTION_RESPONSE,
+            sender=AgentType.EXECUTION,
+            receiver=AgentType.COORDINATOR,
+            session_id=message.session_id,
+            task_id=task_id,
+            response_to=message.message_id,
+            payload=ExecutionResult(
+                status=result_dict.get("status", "failed"),
+                details=result_dict.get("details", ""),
+                metadata=result_dict.get("metadata", {}),
+                error=result_dict.get("error")
+            ).model_dump()
+        )
         
-        # Publish result back to coordinator
-        await broker.publish(Channels.EXECUTION_TO_COORDINATOR, result)
+        logger.info(f"✅ Execution complete: {task_id} -> {result_dict.get('status')}")
+        
+        # Publish proper message (not dict!)
+        await broker_instance.publish(Channels.EXECUTION_TO_COORDINATOR, response_msg)
     
     # Subscribe to execution requests
-    broker.subscribe(Channels.COORDINATOR_TO_EXECUTION, handle_execution_request)
+    broker_instance.subscribe(Channels.COORDINATOR_TO_EXECUTION, handle_execution_request)
     
     logger.info("✅ Execution Agent started")
     

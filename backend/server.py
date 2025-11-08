@@ -389,9 +389,19 @@ async def process_user_input(request: Request):
         logger.error(f"❌ Error processing request: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+"""
+Fixed message handlers for server.py
+Replace your handle_language_output and handle_coordinator_output functions with these
+"""
 
-async def handle_language_output(message: AgentMessage):
-    """Handle output from Language Agent"""
+async def handle_language_output(message):
+    """Handle output from Language Agent - supports both dict and AgentMessage"""
+    
+    # Normalize to AgentMessage if it's a dict
+    if isinstance(message, dict):
+        logger.warning("⚠️ Received dict instead of AgentMessage from Language Agent, converting...")
+        message = AgentMessage(**message)
+    
     logger.info(f"📨 Received from Language Agent: {message.message_type}")
     logger.info(f"📋 Message ID: {message.message_id}")
     logger.info(f"📋 Response to: {message.response_to}")
@@ -399,7 +409,6 @@ async def handle_language_output(message: AgentMessage):
     logger.info(f"📋 Current pending responses: {list(pending_responses.keys())}")
     
     if message.message_type == MessageType.CLARIFICATION_REQUEST:
-        # Clarification needed
         response_content = {
             "status": "clarification_needed",
             "question": message.payload.get("question", "Need more information."),
@@ -408,7 +417,6 @@ async def handle_language_output(message: AgentMessage):
         
         logger.info(f"❓ Clarification needed: {response_content['question']}")
         
-        # Resolve the future
         target_id = message.response_to
         logger.info(f"🔍 Looking for pending response with ID: {target_id}")
         
@@ -418,10 +426,8 @@ async def handle_language_output(message: AgentMessage):
             logger.info(f"✅ Response resolved successfully")
         else:
             logger.error(f"❌ NO PENDING RESPONSE FOUND for: {target_id}")
-            logger.error(f"❌ Available pending IDs: {list(pending_responses.keys())}")
     
     elif message.message_type == MessageType.TASK_RESPONSE:
-        # Direct task response from language agent
         response_content = {
             "status": "completed",
             "text": message.payload.get("response", "Task completed"),
@@ -431,62 +437,67 @@ async def handle_language_output(message: AgentMessage):
         logger.info(f"✅ Task response from Language Agent: {response_content}")
         
         target_id = message.response_to
-        logger.info(f"🔍 Looking for pending response with ID: {target_id}")
-        
         if target_id and target_id in pending_responses:
-            logger.info(f"✅ FOUND! Resolving pending request: {target_id}")
+            logger.info(f"✅ Resolving pending request: {target_id}")
             pending_responses[target_id].set_result(response_content)
-            logger.info(f"✅ Response resolved successfully")
         else:
             logger.error(f"❌ NO PENDING RESPONSE FOUND for: {target_id}")
-            logger.error(f"❌ Available pending IDs: {list(pending_responses.keys())}")
 
 
-async def handle_coordinator_output(message: AgentMessage):
-    """Handle output from Coordinator"""
+async def handle_coordinator_output(message):
+    """Handle output from Coordinator - supports both dict and AgentMessage"""
+    
+    # Normalize to AgentMessage if it's a dict
+    if isinstance(message, dict):
+        logger.warning("⚠️ Received dict instead of AgentMessage from Coordinator, converting...")
+        try:
+            message = AgentMessage(**message)
+        except Exception as e:
+            logger.error(f"❌ Failed to convert dict to AgentMessage: {e}")
+            logger.error(f"❌ Dict content: {message}")
+            return
+    
     logger.info(f"📨 Received from Coordinator: {message.message_type}")
     logger.info(f"📋 Message ID: {message.message_id}")
     logger.info(f"📋 Response to: {message.response_to}")
     logger.info(f"📋 Task ID: {message.task_id}")
     logger.info(f"📋 Payload: {message.payload}")
-    logger.info(f"📋 Current pending responses: {list(pending_responses.keys())}")
     
     if message.message_type == MessageType.TASK_RESPONSE:
-        # Task completed
         result = message.payload
         response = {
-            "status": "completed",
+            "status": result.get("status", "completed"),
             "task_id": message.task_id,
             "text": result.get("response", result.get("result", "Task completed")),
             "result": result
         }
         
         logger.info(f"✅ Task completed: {message.task_id}")
-        logger.info(f"📄 Response content: {response}")
         
-        # Try to find by response_to first
         target_id = message.response_to
-        logger.info(f"🔍 Looking for pending response with ID: {target_id}")
-        
         if target_id and target_id in pending_responses:
-            logger.info(f"✅ FOUND by response_to! Resolving: {target_id}")
+            logger.info(f"✅ Resolving pending request: {target_id}")
             pending_responses[target_id].set_result(response)
-            logger.info(f"✅ Response resolved successfully")
         else:
-            # Fallback: Find any pending response
-            logger.warning(f"⚠️ Target ID {target_id} not found, trying fallback...")
+            logger.warning(f"⚠️ No pending response for {target_id}, trying fallback...")
             for msg_id, future in list(pending_responses.items()):
                 if not future.done():
-                    logger.info(f"✅ FALLBACK! Resolving pending request: {msg_id}")
+                    logger.info(f"✅ FALLBACK! Resolving: {msg_id}")
                     future.set_result(response)
-                    logger.info(f"✅ Response resolved via fallback")
                     break
-            else:
-                logger.error(f"❌ NO PENDING RESPONSES FOUND AT ALL!")
-                logger.error(f"❌ Available pending IDs: {list(pending_responses.keys())}")
+    
+    elif message.message_type == MessageType.CLARIFICATION_REQUEST:
+        response_content = {
+            "status": "clarification_needed",
+            "question": message.payload.get("question", "Need more information."),
+            "response_id": message.message_id
+        }
+        
+        target_id = message.response_to
+        if target_id and target_id in pending_responses:
+            pending_responses[target_id].set_result(response_content)
     
     elif message.message_type == MessageType.ERROR:
-        # Error occurred
         response = {
             "status": "error",
             "error": message.payload.get("error"),
@@ -494,23 +505,10 @@ async def handle_coordinator_output(message: AgentMessage):
         }
         
         logger.error(f"❌ Error from coordinator: {response['error']}")
-        logger.info(f"📋 Current pending responses: {list(pending_responses.keys())}")
         
         target_id = message.response_to
-        logger.info(f"🔍 Looking for pending response with ID: {target_id}")
-        
         if target_id and target_id in pending_responses:
-            logger.info(f"✅ FOUND! Resolving with error: {target_id}")
             pending_responses[target_id].set_result(response)
-        else:
-            logger.warning(f"⚠️ Target ID {target_id} not found, trying fallback...")
-            for msg_id, future in list(pending_responses.items()):
-                if not future.done():
-                    logger.info(f"✅ FALLBACK! Resolving pending request with error: {msg_id}")
-                    future.set_result(response)
-                    break
-            else:
-                logger.error(f"❌ NO PENDING RESPONSES FOUND AT ALL!")
 
 
 @app.post("/reset")

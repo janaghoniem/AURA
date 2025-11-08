@@ -19,6 +19,9 @@ import logging
 from agents.utils.protocol import Channels
 from agents.utils.broker import broker
 from agents.utils.protocol import AgentMessage, MessageType, AgentType, ClarificationMessage
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 ##ADDED BY JANA END
@@ -753,7 +756,14 @@ class TaskCoordinationAgent:
 
         ##ADDED BY JANA BEGIN
         logger.info(f"📋 Generated Task JSON: {task} ")
-        await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, task)
+        task_msg = AgentMessage(
+            message_type=MessageType.TASK_REQUEST,
+            sender=AgentType.LANGUAGE,
+            receiver=AgentType.COORDINATOR,
+            # session_id=self.session_id,
+            payload=task  # Put the task dict into the payload
+        )
+        await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, task_msg)
         ##ADDED BY JANA END 
 
         # return task
