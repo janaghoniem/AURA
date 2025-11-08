@@ -473,6 +473,8 @@ def create_coordinator_graph():
             "refinement_count": refinement_count
         }
 
+    Max_refinement_attempts = 2
+
     async def refine_and_retry(state: Dict) -> Dict:
         """STEP 3: Refine plan and retry"""
         results = state["results"]
@@ -489,7 +491,7 @@ def create_coordinator_graph():
             failed_info["context"]
         )
         
-        if refined_plan:
+        if refined_plan and refinement_count + 1 < Max_refinement_attempts:
             return {
                 **state,
                 "plan": refined_plan,

@@ -27,6 +27,9 @@ from agents.utils.protocol import (
     AgentMessage, MessageType, AgentType, Channels,
     ClarificationMessage
 )
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
