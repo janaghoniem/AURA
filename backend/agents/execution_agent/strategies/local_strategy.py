@@ -12,6 +12,8 @@ import platform
 import subprocess
 from datetime import datetime
 from typing import List
+from difflib import get_close_matches
+
 
 # from backend.agents.execution_agent.core.exec_agent_config import Config, ActionStatus
 # from backend.agents.execution_agent.core.exec_agent_models import ExecutionTask, ExecutionResult
@@ -40,65 +42,136 @@ class LocalStrategy:
         self.vision = vision_layer
         self.action = action_layer
         self.safety = safety_layer
+        
+    def _map_action_type(self, input_action: str) -> str:
+        """Map similar or fuzzy action names to standard ones"""
+        
+        base_actions = {
+            "open_app": ["open", "launch", "start", "run"],
+            "wait_for_app": ["wait", "delay", "pause"],
+            "click_element": ["click", "press", "tap"],
+            "double_click_element": ["double_click", "dblclick"],
+            "type_text": ["type", "input", "write", "enter_text"],
+            "press_key": ["press_key", "key_press"],
+            "hotkey": ["hotkey", "shortcut", "combo"],
+            "move_mouse": ["move_mouse", "move_cursor"],
+            "scroll": ["scroll", "wheel"],
+            "drag_to": ["drag", "drag_to"],
+            "send_message": ["send", "message", "chat"],
+            "join_voice_channel": ["join_voice", "connect_voice"],
+            "leave_voice_channel": ["leave_voice", "disconnect_voice"],
+            "wait": ["sleep", "pause"]
+        }
+        
+        # Normalize input
+        action_lower = input_action.lower()
+        
+        # Direct match
+        if action_lower in base_actions:
+            return action_lower
+        
+        # Fuzzy partial match
+        for standard_action, keywords in base_actions.items():
+            if any(k in action_lower for k in keywords):
+                return standard_action
+        
+        # Special mapping for common keyboard operations
+        if any(k in action_lower for k in ["copy", "cut", "paste", "save", "select_all"]):
+            return "hotkey"
+        
+        # Fallback: fuzzy closest match
+        possible = get_close_matches(action_lower, base_actions.keys(), n=1, cutoff=0.6)
+        if possible:
+            return possible[0]
+        
+        # If no match found
+        return input_action
+    
+
     
     def execute(self, task: ExecutionTask) -> ExecutionResult:
         """Execute local automation task"""
         start_time = time.time()
         logs = []
-        
+
         try:
-            action_type = task.params.get("action_type", "")
-            
-            # Basic application actions
+            # Get the original action and normalize it
+            input_action = task.params.get("action_type", "")
+            action_type = self._map_action_type(input_action)
+
+            # --- Basic Application Actions ---
             if action_type == "open_app":
                 return self._open_application(task, logs, start_time)
-            
+
             elif action_type == "wait_for_app":
                 return self._wait_for_app(task, logs, start_time)
-            
-            # Element interaction actions
+
+            # --- Element Interaction Actions ---
             elif action_type == "click_element":
                 return self._click_element(task, logs, start_time)
-            
+
             elif action_type == "double_click_element":
                 return self._double_click_element(task, logs, start_time)
-            
-            # Text input actions
+
+            # --- Text Input Actions ---
             elif action_type == "type_text":
                 return self._type_text(task, logs, start_time)
-            
-            # Keyboard actions
+
+            # --- Keyboard Actions ---
             elif action_type == "press_key":
                 return self._press_key(task, logs, start_time)
-            
+
+            # --- Smart Handling for Common Shortcuts ---
+            elif input_action.lower() in ["copy", "copy_text"]:
+                task.params["keys"] = ["ctrl", "c"]
+                return self._execute_hotkey(task, logs, start_time)
+
+            elif input_action.lower() in ["paste", "paste_text"]:
+                task.params["keys"] = ["ctrl", "v"]
+                return self._execute_hotkey(task, logs, start_time)
+
+            elif input_action.lower() in ["cut", "cut_text"]:
+                task.params["keys"] = ["ctrl", "x"]
+                return self._execute_hotkey(task, logs, start_time)
+
+            elif input_action.lower() in ["select_all", "select_text"]:
+                task.params["keys"] = ["ctrl", "a"]
+                return self._execute_hotkey(task, logs, start_time)
+
+            elif input_action.lower() in ["save", "save_file"]:
+                task.params["keys"] = ["ctrl", "s"]
+                return self._execute_hotkey(task, logs, start_time)
+
+            # --- Hotkey Actions ---
             elif action_type == "hotkey":
                 return self._execute_hotkey(task, logs, start_time)
-            
-            # Mouse actions
+
+            # --- Mouse Actions ---
             elif action_type == "move_mouse":
                 return self._move_mouse(task, logs, start_time)
-            
+
             elif action_type == "scroll":
                 return self._scroll(task, logs, start_time)
-            
+
             elif action_type == "drag_to":
                 return self._drag_to(task, logs, start_time)
-            
-            # Messaging actions
+
+            # --- Messaging Actions ---
             elif action_type == "send_message":
                 return self._send_message(task, logs, start_time)
-            
-            # Voice channel actions
+
+            # --- Voice Channel Actions ---
             elif action_type == "join_voice_channel":
                 return self._join_voice_channel(task, logs, start_time)
-            
+
             elif action_type == "leave_voice_channel":
                 return self._leave_voice_channel(task, logs, start_time)
-            
-            # Wait action
+
+            # --- Wait Action ---
             elif action_type == "wait":
                 return self._wait(task, logs, start_time)
-            
+
+            # --- Unknown Action ---
             else:
                 return ExecutionResult(
                     status=ActionStatus.FAILED.value,
@@ -111,11 +184,11 @@ class LocalStrategy:
                     duration=time.time() - start_time,
                     error="Unknown action type"
                 )
-        
+
         except Exception as e:
             self.logger.error(f"Local execution error: {e}")
             screenshot = self.vision.capture_screen()
-            
+
             return ExecutionResult(
                 status=ActionStatus.FAILED.value,
                 task_id=task.task_id,
@@ -128,7 +201,8 @@ class LocalStrategy:
                 error=str(e),
                 screenshot_path=screenshot
             )
-    
+
+
     # ==================== APPLICATION ACTIONS ====================
     
     def _open_application(self, task: ExecutionTask, logs: List, start_time: float) -> ExecutionResult:

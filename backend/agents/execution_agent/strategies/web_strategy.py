@@ -40,7 +40,7 @@ class WebStrategy:
             action_type = task.params.get("action_type", "")
             
             # Actions that manage their own drivers
-            if action_type == "extract_web_content":
+            if action_type == "extract_data":
                 return self._extract_web_content(task, logs, start_time)
             
             # Browser management
