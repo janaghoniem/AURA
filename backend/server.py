@@ -450,32 +450,35 @@ async def handle_language_output(message):
 async def handle_coordinator_output(message):
     """Handle output from Coordinator - supports both dict and AgentMessage"""
     
-    # Normalize to AgentMessage if it's a dict
+    # Normalize to AgentMessage
     if isinstance(message, dict):
-        logger.warning("⚠️ Received dict instead of AgentMessage from Coordinator, converting...")
+        logger.warning("⚠️ Received dict from Coordinator, converting...")
         try:
             message = AgentMessage(**message)
         except Exception as e:
-            logger.error(f"❌ Failed to convert dict to AgentMessage: {e}")
+            logger.error(f"❌ Failed to convert: {e}")
             logger.error(f"❌ Dict content: {message}")
             return
     
-    logger.info(f"📨 Received from Coordinator: {message.message_type}")
-    logger.info(f"📋 Message ID: {message.message_id}")
-    logger.info(f"📋 Response to: {message.response_to}")
-    logger.info(f"📋 Task ID: {message.task_id}")
-    logger.info(f"📋 Payload: {message.payload}")
+    logger.info(f"📨 Coordinator → Server: {message.message_type}")
     
     if message.message_type == MessageType.TASK_RESPONSE:
         result = message.payload
+        
+        # CHANGE 10A: Extract response text safely
+        response_text = result.get("response")
+        if not response_text:
+            # Fallback to result details
+            response_text = result.get("result", {}).get("details", "Task completed")
+        
         response = {
             "status": result.get("status", "completed"),
             "task_id": message.task_id,
-            "text": result.get("response", result.get("result", "Task completed")),
+            "text": response_text,  # This goes to TTS
             "result": result
         }
         
-        logger.info(f"✅ Task completed: {message.task_id}")
+        logger.info(f"✅ Task completed, sending to TTS: '{response_text}'")
         
         target_id = message.response_to
         if target_id and target_id in pending_responses:
@@ -483,35 +486,6 @@ async def handle_coordinator_output(message):
             pending_responses[target_id].set_result(response)
         else:
             logger.warning(f"⚠️ No pending response for {target_id}, trying fallback...")
-            for msg_id, future in list(pending_responses.items()):
-                if not future.done():
-                    logger.info(f"✅ FALLBACK! Resolving: {msg_id}")
-                    future.set_result(response)
-                    break
-    
-    elif message.message_type == MessageType.CLARIFICATION_REQUEST:
-        response_content = {
-            "status": "clarification_needed",
-            "question": message.payload.get("question", "Need more information."),
-            "response_id": message.message_id
-        }
-        
-        target_id = message.response_to
-        if target_id and target_id in pending_responses:
-            pending_responses[target_id].set_result(response_content)
-    
-    elif message.message_type == MessageType.ERROR:
-        response = {
-            "status": "error",
-            "error": message.payload.get("error"),
-            "details": message.payload.get("details", "")
-        }
-        
-        logger.error(f"❌ Error from coordinator: {response['error']}")
-        
-        target_id = message.response_to
-        if target_id and target_id in pending_responses:
-            pending_responses[target_id].set_result(response)
 
 
 @app.post("/reset")

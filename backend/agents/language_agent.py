@@ -83,7 +83,7 @@ def call_gemini_api(messages: List[Dict[str, str]], max_tokens=MAX_TOKENS) -> st
         "contents": contents,
         "generationConfig": {
             "maxOutputTokens": max_tokens,
-            "temperature": 0.7,
+            "temperature": 0.1,        
             "topP": 0.9,
         }
     }
@@ -675,7 +675,7 @@ class TaskCoordinationAgent:
         """Check if LLM signals task is complete"""
         return "TASK_COMPLETE" in response
 
-    async def decompose_task(self):
+    async def decompose_task(self, http_request_id: str):
         """Let LLM extract information and create JSON"""
         
         print("\n" + "="*70)
@@ -735,8 +735,8 @@ class TaskCoordinationAgent:
                 "task_id": "",
                 "depends_on": "",
                 "priority": "",
-                "timeout": None,
-                "retry_count": None
+                "timeout": 30,
+                "retry_count": 2
             }
 
         ##COMMENTED BY JANA BEGIN
@@ -760,6 +760,7 @@ class TaskCoordinationAgent:
             message_type=MessageType.TASK_REQUEST,
             sender=AgentType.LANGUAGE,
             receiver=AgentType.COORDINATOR,
+            response_to=http_request_id,
             # session_id=self.session_id,
             payload=task  # Put the task dict into the payload
         )
@@ -822,6 +823,7 @@ async def start_language_agent(broker):
 
         # Process input with LLM
         response, is_complete = agent.user_turn(message.payload["input"])
+        http_request_id = message.message_id
         
         # Display response
         print(f"🤖 Agent: {response}\n")
@@ -829,7 +831,7 @@ async def start_language_agent(broker):
         # Auto-decompose if complete
         if is_complete:
             print("✅ Task information complete!\n")
-            await agent.decompose_task()
+            await agent.decompose_task(http_request_id=http_request_id)
             
             # Reset for next task
             agent.memory = [{"role": "system", "content": SYSTEM_PROMPT}]

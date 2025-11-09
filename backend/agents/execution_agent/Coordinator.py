@@ -195,23 +195,34 @@ def execute_single_task(agent, task_file: str):
     return result
 
 
+# In Coordinator.py - start_execution_agent function
+
 async def start_execution_agent(broker_instance):
     """Start Execution Agent with proper message handling"""
     
     agent = ExecutionAgent()
+    
+    # CHANGE 1: Track if already started to prevent double subscription
+    if hasattr(broker_instance, '_execution_subscribed'):
+        logger.warning("⚠️ Execution agent already subscribed, skipping")
+        return
+    broker_instance._execution_subscribed = True
 
     async def handle_execution_request(message: AgentMessage):
         """Handle execution request from Coordinator"""
         
-        # Extract task info
         task_id = message.task_id or "unknown"
         task_payload = message.payload
         
-        logger.info(f"Executing: {task_id}")
-        logger.info(f"Task payload: {task_payload}")
+        # CHANGE 2: Add request logging with unique identifier
+        logger.info(f"🎯 [REQ-{message.message_id[:8]}] Executing: {task_id}")
+        logger.debug(f"📋 [REQ-{message.message_id[:8]}] Payload: {task_payload}")
         
         # Execute the task
         result_dict = agent.execute_from_dict(task_payload)
+        
+        # CHANGE 3: Log only once per execution with same identifier
+        logger.info(f"✅ [REQ-{message.message_id[:8]}] Complete: {task_id} -> {result_dict.get('status')}")
         
         # Create proper AgentMessage response
         response_msg = AgentMessage(
@@ -224,14 +235,12 @@ async def start_execution_agent(broker_instance):
             payload=ExecutionResult(
                 status=result_dict.get("status", "failed"),
                 details=result_dict.get("details", ""),
-                metadata=result_dict.get("metadata", {}),
+                # metadata=result_dict.get("metadata", {}),  # CHANGE 4: Comment out if causing issues
                 error=result_dict.get("error")
             ).model_dump()
         )
         
-        logger.info(f"✅ Execution complete: {task_id} -> {result_dict.get('status')}")
-        
-        # Publish proper message (not dict!)
+        # Publish proper message
         await broker_instance.publish(Channels.EXECUTION_TO_COORDINATOR, response_msg)
     
     # Subscribe to execution requests

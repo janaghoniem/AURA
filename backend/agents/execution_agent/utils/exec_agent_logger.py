@@ -40,6 +40,7 @@ def setup_logging(name="ExecutionAgent", log_level=None):
     
     # Create logger
     logger = logging.getLogger(name)
+    logger.propagate = False
     logger.setLevel(log_level)
     
     # Clear existing handlers

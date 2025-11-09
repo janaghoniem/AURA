@@ -4,6 +4,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
+from ..execution_agent.core import ActionStatus
 
 import logging
 from agents.utils.protocol import (
@@ -21,7 +22,7 @@ from .config.settings import LLM_MODEL
 
 llm = ChatGoogleGenerativeAI(
     model=LLM_MODEL,
-    temperature=0.2,
+    temperature=0.1,
     max_output_tokens=2048
 )
 
@@ -71,23 +72,44 @@ class TaskSpec(BaseModel):
     context: str
     params: Dict[str, Any]
     priority: str = "normal"
-    timeout: int = 30
-    retry_count: int = 3
+    timeout: Optional[int] = 30
+    retry_count: Optional[int] = 2
     depends_on: Optional[str] = None
     is_root: bool = True  # NEW: Track if this is a root task or subtask
 
+
 def validate_and_enhance_task(raw_task: Dict[str, Any], is_root: bool = True) -> TaskSpec:
+    """Validate and enhance task with proper None/empty handling"""
+    
+    # Generate task_id if missing
     if not raw_task.get("task_id"):
         raw_task["task_id"] = str(uuid.uuid4())
     
-    raw_task.setdefault("priority", "normal")
-    raw_task.setdefault("timeout", 30)
-    raw_task.setdefault("retry_count", 2)
+    if raw_task.get("priority") in [None, "", " "]:
+        raw_task["priority"] = "normal"
+    
+    if raw_task.get("timeout") in [None, "", " "]:
+        raw_task["timeout"] = 30
+    
+    if raw_task.get("retry_count") in [None, "", " "]:
+        raw_task["retry_count"] = 2
+    
     raw_task["is_root"] = is_root
     
-    for key in ["priority", "timeout", "retry_count", "depends_on"]:
-        if raw_task.get(key) == "":
-            raw_task.pop(key, None)
+    # Clean up optional fields
+    if raw_task.get("depends_on") in [None, "", " "]:
+        raw_task.pop("depends_on", None)
+    
+    # Ensure timeout and retry_count are integers
+    try:
+        raw_task["timeout"] = int(raw_task["timeout"])
+    except (ValueError, TypeError):
+        raw_task["timeout"] = 30
+    
+    try:
+        raw_task["retry_count"] = int(raw_task["retry_count"])
+    except (ValueError, TypeError):
+        raw_task["retry_count"] = 2
     
     return TaskSpec(**raw_task)
 
@@ -96,14 +118,17 @@ class CoordinatorState(BaseModel):
     input: Dict[str, Any]
     plan: Optional[Dict[str, Any]] = None
     results: Dict[str, Any] = Field(default_factory=dict)
-    clarification: Optional[str] = None
+    # clarification: Optional[str] = None
     status: str = "pending"
     session_id: Optional[str] = None
     original_message_id: Optional[str] = None  # Track original request
     refinement_count: int = 0  # Track how many times we've refined the plan
+    completed_task_ids: List[str] = Field(default_factory=list)
     failed_tasks: List[Dict[str, Any]] = Field(default_factory=list)
 
 # --- Plan Refinement with LLM ---
+# CHANGE 14: In coordinator_agent.py - refine_plan_with_llm function
+
 async def refine_plan_with_llm(
     original_plan: Dict[str, Any],
     failed_task: Dict[str, Any],
@@ -112,47 +137,62 @@ async def refine_plan_with_llm(
 ) -> Optional[Dict[str, Any]]:
     """Ask LLM to refine the plan based on failure"""
     
+    # CHANGE 14A: Extract completed task IDs
+    completed_ids = context.get("completed_task_ids", [])
+    
     prompt = f"""You are a task execution planner. A task in your plan failed, and you need to create an improved plan.
 
-# ORIGINAL PLAN
-{json.dumps(original_plan, indent=2)}
+        # ORIGINAL PLAN
+        {json.dumps(original_plan, indent=2)}
 
-# FAILED TASK
-Task ID: {failed_task.get('task_id')}
-Action: {failed_task.get('action')}
-Context: {failed_task.get('context')}
-Action Type: {failed_task.get('params', {}).get('action_type')}
-Error: {error_details}
+        # COMPLETED TASKS (DO NOT INCLUDE THESE IN NEW PLAN)
+        {completed_ids}
 
-# EXECUTION CONTEXT
-Completed tasks: {[t for t, s in context.get('completed_tasks', {}).items() if s == 'success']}
-Failed tasks: {[t for t, s in context.get('completed_tasks', {}).items() if s == 'failed']}
+        # FAILED TASK
+        Task ID: {failed_task.get('task_id')}
+        Action: {failed_task.get('action')}
+        Context: {failed_task.get('context')}
+        Action Type: {failed_task.get('params', {}).get('action_type')}
+        Error: {error_details}
 
-# YOUR TASK
-Analyze why the task failed and create an IMPROVED plan that addresses the issue.
+        # EXECUTION CONTEXT
+        Completed tasks: {[t for t, s in context.get('completed_tasks', {}).items() if s == 'success']}
+        Failed tasks: {[t for t, s in context.get('completed_tasks', {}).items() if s == 'failed']}
 
-Common fixes:
-- If "click_element" failed: Try "press_key" or "hotkey" instead
-- If "type_text" failed: Try "hotkey" to paste or use different input method
-- If app didn't load: Add "wait_for_app" before interacting
-- If element not found: Add explicit "wait" or use different selector
-- If sequence wrong: Reorder tasks or add intermediate steps
+        # YOUR TASK
+        Create a refined plan that:
+        1. SKIPS all tasks in the "COMPLETED TASKS" list (they already succeeded)
+        2. Starts from the FAILED TASK
+        3. Uses alternative methods for the failed task
+        4. Includes any remaining tasks after the failed one
 
-CRITICAL RULES:
-1. Keep successful tasks from original plan
-2. Only modify/replace the failed task and dependent tasks
-3. Use alternative action_types that are more reliable
-4. Add wait steps if timing was the issue
-5. Preserve task_id format and structure
+        CRITICAL RULES:
+        1. DO NOT include tasks from COMPLETED TASKS list
+        2. Only include the failed task (with improvements) and any subsequent tasks
+        3. Maintain dependencies correctly
+        4. Use alternative action_types that are more reliable
+        5. If failed task context is "reasoning" try to generate the logical task yourself
+        6. Keep the same overall goal as the original plan
+        7. retry_count for refined tasks should only be 1
 
-OUTPUT FORMAT: Return ONLY valid JSON with same structure as original plan:
-{{
-  "needs_decomposition": true/false,
-  "parallel": [...],
-  "sequential": [...]
-}}
+        Common fixes:
+        - If "click_element" failed: Try "press_key" or "hotkey" instead
+        - If "type_text" failed: Try "hotkey" to paste or use different input method
+        - If app didn't load: Add "wait_for_app" before interacting
+        - If element not found: Add explicit "wait" or use different selector
 
-Generate the refined plan now:"""
+        OUTPUT FORMAT: Return ONLY valid JSON with same structure:
+        {{
+        "needs_decomposition": true/false,
+        "parallel": [],
+        "sequential": [
+            // ONLY include failed task + subsequent tasks
+            // DO NOT include completed tasks
+            // ADD PARAMETER "refined": true to failed task
+        ]
+        }}
+
+        Generate the refined plan now:"""
 
     try:
         response = await llm.ainvoke(prompt)
@@ -166,7 +206,7 @@ Generate the refined plan now:"""
                 response_text = response_text[4:]
         
         refined_plan = json.loads(response_text.strip())
-        logger.info(f"✅ LLM generated refined plan")
+        logger.info(f"✅ LLM generated refined plan with {len(refined_plan.get('sequential', []))} tasks")
         return refined_plan
         
     except Exception as e:
@@ -357,6 +397,8 @@ def create_coordinator_graph():
                 task["is_root"] = False  # These are subtasks
             for task in plan.get("parallel", []):
                 task["is_root"] = False
+
+            logger.info(f"🧾 [DEBUG] Full generated task plan:\n{json.dumps(plan, indent=2)}")
             
             return {
                 "input": state["input"],
@@ -386,6 +428,12 @@ def create_coordinator_graph():
         session_id = state.get("session_id")
         original_message_id = state.get("original_message_id")
         refinement_count = state.get("refinement_count", 0)
+        completed_task_ids = state.get("completed_task_ids", [])
+
+        # CHANGE 11A: Add max refinement check at start
+        MAX_REFINEMENTS = 2
+        if refinement_count >= MAX_REFINEMENTS:
+            logger.warning(f"⚠️ Max refinements ({MAX_REFINEMENTS}) reached, will not retry further")
         
         results = {
             "parallel_results": [],
@@ -409,6 +457,23 @@ def create_coordinator_graph():
         task_outputs = {}
         
         for task in plan.get("sequential", []):
+
+            logger.info(f"🧾 [EXECUTION] Running task JSON:\n{json.dumps(task, indent=2)}")
+
+            task_id = task.get("task_id")
+
+            # CHANGE 13B: Skip already completed tasks
+            if task_id in completed_task_ids:
+                logger.info(f"⏭️ [SKIP] Task {task_id} already completed in previous attempt")
+                results["completed_tasks"][task_id] = "success"
+                results["sequential_results"].append({
+                    "task_id": task_id,
+                    "action": task["action"],
+                    "result": {"status": "success", "details": "Previously completed"},
+                    "skipped": True
+                })
+                continue
+
             # Check for interruption
             if task_state.should_stop:
                 logger.warning("⚠️ Execution stopped by user")
@@ -430,10 +495,25 @@ def create_coordinator_graph():
             
             # Track result
             status = result.get("status", "failed")
-            task_state.complete_task(task["task_id"], status)
-            results["completed_tasks"][task["task_id"]] = status
-            
-            if status == "success":
+
+            # NORMALIZE STATUS - handle both enum values and strings
+            if status in ["success", "SUCCESS", ActionStatus.SUCCESS.value]:
+                normalized_status = "success"
+            elif status in ["failed", "FAILED", ActionStatus.FAILED.value]:
+                normalized_status = "failed"
+            else:
+                normalized_status = status
+
+            task_state.complete_task(task["task_id"], normalized_status)
+            results["completed_tasks"][task["task_id"]] = normalized_status
+
+            logger.info(f"📊 [TASK-{task['task_id'][:8]}] Status: {status} -> Normalized: {normalized_status}")
+
+            if normalized_status == "success":
+                # Task succeeded
+                if task_id not in completed_task_ids:
+                    completed_task_ids.append(task_id)
+
                 task_outputs[task["task_id"]] = result
                 results["sequential_results"].append({
                     "task_id": task["task_id"],
@@ -442,35 +522,43 @@ def create_coordinator_graph():
                 })
             else:
                 # Task failed - determine if critical
-                is_critical = not task.get("is_root", True)  # Subtasks are critical
-                
-                if is_critical and refinement_count < 3:
-                    # Trigger plan refinement
-                    logger.warning(f"⚠️ Critical subtask failed: {task['task_id']}, attempting refinement")
+                is_critical = not task.get("is_root", True)
+                is_refined = task.get("refined", False)
+
+                # CHANGE 11B: Check refinement limit before triggering refinement
+                if is_critical and refinement_count < MAX_REFINEMENTS and not is_refined:
+                    logger.warning(f"⚠️ Critical subtask failed: {task['task_id']}, attempting refinement ({refinement_count + 1}/{MAX_REFINEMENTS})")
                     results["needs_refinement"] = True
                     results["failed_critical"] = {
                         "task": task,
                         "error": result.get("error", "Unknown error"),
-                        "context": results["completed_tasks"]
+                        "context": results["completed_tasks"],
+                        "completed_task_ids": completed_task_ids
                     }
                     break
                 else:
-                    # Root task failed or max refinements reached - report to user
-                    logger.error(f"❌ Task failed: {task['task_id']}")
+                    # CHANGE 11C: Report failure to user if max refinements reached
+                    if refinement_count >= MAX_REFINEMENTS:
+                        logger.error(f"❌ Max refinements reached. Task failed: {task['task_id']}")
+                    else:
+                        logger.error(f"❌ Root task failed: {task['task_id']}")
+                    
                     results["sequential_results"].append({
                         "task_id": task["task_id"],
                         "action": task["action"],
                         "result": result,
-                        "status": "failed"
+                        "status": "failed",
+                        "message": "Max retry attempts reached" if refinement_count >= MAX_REFINEMENTS else "Task failed"
                     })
         
         return {
             **state,
             "results": results,
-            "status": "needs_refinement" if results.get("needs_refinement") else "executed",
+            "status": "needs_refinement" if (results.get("needs_refinement") and not results.get("is_refined")) else "executed",
             "session_id": session_id,
             "original_message_id": original_message_id,
-            "refinement_count": refinement_count
+            "refinement_count": refinement_count, 
+            "completed_task_ids": completed_task_ids
         }
 
     async def refine_and_retry(state: Dict) -> Dict:
@@ -480,7 +568,7 @@ def create_coordinator_graph():
         original_plan = state["plan"]
         refinement_count = state["refinement_count"]
         
-        logger.info(f"🔄 Attempting plan refinement (attempt {refinement_count + 1}/3)")
+        logger.info(f"🔄 Attempting plan refinement (attempt {refinement_count + 1}/2)")
         
         refined_plan = await refine_plan_with_llm(
             original_plan,
@@ -509,6 +597,8 @@ def create_coordinator_graph():
                 "original_message_id": state.get("original_message_id")
             }
 
+    # CHANGE 9: In coordinator_agent.py - send_feedback function
+
     async def send_feedback(state: Dict) -> Dict:
         """STEP 4: Send results back to language agent"""
         results = state.get("results", {})
@@ -521,7 +611,19 @@ def create_coordinator_graph():
         
         # Only send to user if root task or all subtasks complete
         if not is_subtask_plan or results.get("status") != "success":
-            # Create proper AgentMessage
+            # CHANGE 9A: Create proper response structure for TTS
+            completed_count = sum(1 for s in results.get("completed_tasks", {}).values() if s == "success")
+            total_count = len(results.get("completed_tasks", {}))
+            
+            # Build user-friendly response text
+            if completed_count == total_count and total_count > 0:
+                response_text = f"Task completed successfully! Executed {completed_count} steps."
+            elif completed_count > 0:
+                response_text = f"Partially completed: {completed_count}/{total_count} steps succeeded."
+            else:
+                response_text = "Task could not be completed. Please try again."
+            
+            # CHANGE 9B: Ensure payload structure matches what TTS expects
             response_msg = AgentMessage(
                 message_type=MessageType.TASK_RESPONSE,
                 sender=AgentType.COORDINATOR,
@@ -529,23 +631,27 @@ def create_coordinator_graph():
                 session_id=session_id,
                 response_to=original_message_id,
                 payload={
-                    "status": "success" if results.get("completed_tasks") else "failed",
-                    "response": "Task completed successfully" if results.get("completed_tasks") else "Task failed",
-                    "result": results
+                    "status": "success" if completed_count > 0 else "failed",
+                    "response": response_text,  # CRITICAL: Use "response" key for TTS
+                    "result": {
+                        "completed_tasks": results.get("completed_tasks", {}),
+                        "details": results.get("sequential_results", [])
+                    }
                 }
             )
             
+            logger.info(f"📤 [FEEDBACK] Sending to Language Agent: {response_text}")
             await broker.publish(Channels.COORDINATOR_TO_LANGUAGE, response_msg)
         
-        # Store in memory
-        if results:
-            memory_entry = f"Task: {state['input'].get('action')} | Success: {len(results.get('sequential_results', []))} steps"
-            short_term_memory.add(memory_entry)
-        
-        # Reset task state
-        task_state.reset()
-        
-        return {"status": "completed"}
+            # Store in memory
+            if results:
+                memory_entry = f"Task: {state['input'].get('action')} | Success: {len(results.get('sequential_results', []))} steps"
+                short_term_memory.add(memory_entry)
+            
+            # Reset task state
+            task_state.reset()
+            
+            return {"status": "completed"}
 
     # Build graph
     graph.add_node("analyze", analyze_and_decompose)
@@ -554,17 +660,17 @@ def create_coordinator_graph():
     graph.add_node("feedback", send_feedback)
 
     graph.set_entry_point("analyze")
-    
+
     def route_after_analysis(state):
         if state.get("clarification"):
             return END
         return "execute"
-    
+
     def route_after_execution(state):
         if state.get("status") == "needs_refinement":
             return "refine"
         return "feedback"
-    
+
     graph.add_conditional_edges("analyze", route_after_analysis)
     graph.add_conditional_edges("execute", route_after_execution)
     graph.add_edge("refine", "execute")  # Retry after refinement
@@ -617,31 +723,33 @@ async def start_coordinator_agent(broker_instance):
     async def handle_task_from_language(message: AgentMessage):
         """Handle task from Language Agent"""
         logger.info(f"Coordinator received: {message.payload.get('action')}")
+
+        http_request_id = message.response_to if message.response_to else message.message_id
         
         # Extract session tracking
         state_input = {
             "input": message.payload,
             "session_id": message.session_id,
-            "original_message_id": message.message_id
+            "original_message_id": http_request_id
         }
         
         result = await coordinator_graph.ainvoke(state_input)
         logger.info(f"Coordinator processed task: {result.get('status')}")
         
-        # Send clarification if needed
-        if result.get("clarification"):
-            clarification_msg = AgentMessage(
-                message_type=MessageType.CLARIFICATION_REQUEST,
-                sender=AgentType.COORDINATOR,
-                receiver=AgentType.LANGUAGE,
-                session_id=message.session_id,
-                response_to=message.message_id,
-                payload={
-                    "status": "needs_clarification",
-                    "question": result["clarification"]
-                }
-            )
-            await broker_instance.publish(Channels.COORDINATOR_TO_LANGUAGE, clarification_msg)
+        # # Send clarification if needed
+        # if result.get("clarification"):
+        #     clarification_msg = AgentMessage(
+        #         message_type=MessageType.CLARIFICATION_REQUEST,
+        #         sender=AgentType.COORDINATOR,
+        #         receiver=AgentType.LANGUAGE,
+        #         session_id=message.session_id,
+        #         response_to=message.message_id,
+        #         payload={
+        #             "status": "needs_clarification",
+        #             "question": result["clarification"]
+        #         }
+        #     )
+        #     await broker_instance.publish(Channels.COORDINATOR_TO_LANGUAGE, clarification_msg)
     
     async def handle_execution_result(message: AgentMessage):
         """Handle result from Execution Agent"""
