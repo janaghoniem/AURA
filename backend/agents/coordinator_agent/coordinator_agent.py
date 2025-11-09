@@ -82,7 +82,7 @@ def validate_and_enhance_task(raw_task: Dict[str, Any], is_root: bool = True) ->
     
     raw_task.setdefault("priority", "normal")
     raw_task.setdefault("timeout", 30)
-    raw_task.setdefault("retry_count", 3)
+    raw_task.setdefault("retry_count", 2)
     raw_task["is_root"] = is_root
     
     for key in ["priority", "timeout", "retry_count", "depends_on"]:
@@ -473,8 +473,6 @@ def create_coordinator_graph():
             "refinement_count": refinement_count
         }
 
-    Max_refinement_attempts = 2
-
     async def refine_and_retry(state: Dict) -> Dict:
         """STEP 3: Refine plan and retry"""
         results = state["results"]
@@ -491,7 +489,7 @@ def create_coordinator_graph():
             failed_info["context"]
         )
         
-        if refined_plan and refinement_count + 1 < Max_refinement_attempts:
+        if refined_plan:
             return {
                 **state,
                 "plan": refined_plan,
