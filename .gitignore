@@ -69,3 +69,6 @@ audit.json
 *.bak
 *~
 
+/backend/agents/execution_agent/data
+backend/conversations.jsonl
+

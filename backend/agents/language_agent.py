@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # CONFIG - GEMINI API
 # -----------------------
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Set: export GEMINI_API_KEY=your_key
-MODEL_NAME = "gemini-2.0-flash-exp"  # Smartest fast model
+MODEL_NAME = "gemini-2.5-flash"  # Smartest fast model
 API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent"
 
 CONV_SAVE_PATH = "conversations.jsonl"
