@@ -1,37 +1,40 @@
 # Core framework
-fastapi
-uvicorn
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
 
 # Environment management
-python-dotenv
+python-dotenv>=1.0.0
 
 # HTTP requests & async utilities
-httpx
-requests
-aiohttp
+httpx>=0.27.0
+requests>=2.32.0
+aiohttp>=3.9.0
 
-# LLM and AI integrations
-langchain
-langchain-core
-langchain-google-genai
-google-generativeai
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
-protobuf
-grpcio
-grpcio-status
+# LLM and AI integrations - FIXED VERSIONS
+langchain==0.2.16
+langchain-core==0.2.43
+langchain-google-genai==1.0.10
+google-generativeai>=0.7.0,<0.8.0
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+protobuf>=4.25.0,<6.0.0
+grpcio>=1.60.0
+grpcio-status>=1.60.0
+
+# Memory by shahd
+langgraph-checkpoint-sqlite==3.0.2
+langchain-chroma==0.1.4
 
 # Data handling and utilities
-pydantic>=1.10.0,<2.0.0
-typing-extensions
-jsonschema
+pydantic>=2.7.4,<3.0.0
+typing-extensions>=4.12.0
+jsonschema>=4.20.0
 
 # Optional (for pub/sub or messaging between agents)
-redis
-asyncio
+redis>=5.0.0
 
 # For testing and development
-pytest
-pytest-asyncio
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

@@ -19,7 +19,9 @@ import logging
 from agents.utils.protocol import Channels
 from agents.utils.broker import broker
 from agents.utils.protocol import AgentMessage, MessageType, AgentType, ClarificationMessage
+from agents.coordinator_agent.memory.memory_store import get_memory_manager # Ensure import
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -824,7 +826,19 @@ async def start_language_agent(broker):
         # Process input with LLM
         response, is_complete = agent.user_turn(message.payload["input"])
         http_request_id = message.message_id
+        user_input = message.payload["input"]
+        user_id = message.payload.get("user_id", "default_user")
+        session_id = message.session_id
         
+        memory_mgr=get_memory_manager(user_id,session_id)
+        memory_context=memory_mgr.get_full_context_for_llm(current_query=user_input)
+        print(f"🧠 Retrieved Memory Context:\n{memory_context}\n")
+
+        if memory_context:
+            memory_instruction = f"\n[MEMORY CONTEXT]\n{memory_context}\n[/MEMORY CONTEXT]\n"
+            agent.memory.insert(1,{"role": "system", "content": f"Recent Memory:\n{memory_context}"})
+
+        response, is_complete = agent.user_turn(user_input)
         # Display response
         print(f"🤖 Agent: {response}\n")
         
@@ -834,7 +848,7 @@ async def start_language_agent(broker):
             await agent.decompose_task(http_request_id=http_request_id)
             
             # Reset for next task
-            agent.memory = [{"role": "system", "content": SYSTEM_PROMPT}]
+            # agent.memory = [{"role": "system", "content": SYSTEM_PROMPT}]
             print("🔄 Ready for next task!\n")
         else:
             clarification_msg = AgentMessage(
@@ -850,6 +864,38 @@ async def start_language_agent(broker):
             )
             
             await broker.publish(Channels.LANGUAGE_OUTPUT, clarification_msg)
+        
+        if user_input.lower() in ["new chat", "start new chat", "reset conversation", "clear context"]:
+            session_control_msg = AgentMessage(
+                message_type=MessageType.SESSION_CONTROL,
+                sender=AgentType.LANGUAGE,
+                receiver=AgentType.COORDINATOR,
+                session_id=message.session_id,
+                payload={
+                    "command": "start_new_chat"
+                }
+            )
+            await broker.publish(Channels.SESSION_CONTROL, session_control_msg)
+            print("starting a new chat")
+            agent.memory = [{"role": "system", "content": SYSTEM_PROMPT}]
+            print("Conversation reset. Ready for new chat!\n")
+            return 
+        
+        if user_input.lower().startswith("remember that"):
+            preference_text=user_input.replace("remember that","").strip()
+
+            #send to coordinator
+            pref_msg = AgentMessage(
+                message_type=MessageType.STORE_PREFERENCE,
+                sender=AgentType.LANGUAGE,
+                receiver=AgentType.COORDINATOR,
+                session_id=message.session_id,
+                payload={
+                    "preference": preference_text,
+                    "category": "explicit"
+                }
+            )
+            await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, pref_msg)
 
     broker.subscribe(Channels.LANGUAGE_INPUT, handle_user_input)
     logger.info("✅ Language Agent started")

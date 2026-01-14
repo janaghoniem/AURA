@@ -8,6 +8,7 @@ Version: 1.0.0
 
 # Check for optional dependencies
 try:
+    import pywinauto
     from pywinauto import Application, Desktop
     from pywinauto.controls.uiawrapper import UIAWrapper
     PYWINAUTO_AVAILABLE = True
