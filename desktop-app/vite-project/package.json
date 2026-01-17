@@ -1,9 +1,10 @@
 {
-  "name": "vite-project",
+  "name": "aura",
+  "productName": "AURA",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "main.cjs",
+  "main": "main.js",
   "scripts": {
     "dev": "vite",
     "electron": "concurrently \"npm run dev\" \"electron .\"",
