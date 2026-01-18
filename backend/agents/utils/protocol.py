@@ -17,6 +17,9 @@ class MessageType(str, Enum):
     EXECUTION_RESPONSE = "execution_response"
     STATUS_UPDATE = "status_update"
     ERROR = "error"
+    SESSION_CONTROL = "session_control"
+    STORE_PREFERENCE = "store_preference"
+    MEMORY_INSPECTION = "memory_inspection"  # Optional
 
 class AgentType(str, Enum):
     """Agent types in the system"""
@@ -87,3 +90,5 @@ class Channels:
     REASONING_OUTPUT = "reasoning.output"
     
     BROADCAST = "broadcast"  # For status updates
+    SESSION_CONTROL = "session_control"
+    PREFERENCE_STORAGE = "preference_storage"

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Loading AURA</title>
+  <style>
+    body {
+      margin: 0;
+      background: radial-gradient(circle, #0b0014, #050008);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      color: white;
+      font-family: Inter, sans-serif;
+    }
+
+    .container {
+      text-align: center;
+    }
+
+    .orb {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #ff4d6d, #7a1fa2);
+      animation: pulse 1.4s infinite ease-in-out;
+      margin: 0 auto 20px;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.9); opacity: 0.7; }
+      50% { transform: scale(1.05); opacity: 1; }
+      100% { transform: scale(0.9); opacity: 0.7; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="orb"></div>
+    <div>Starting AURA…</div>
+  </div>
+</body>
+</html>

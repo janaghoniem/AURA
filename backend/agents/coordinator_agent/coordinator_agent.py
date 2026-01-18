@@ -5,7 +5,14 @@ from langgraph.graph import StateGraph, END
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from ..execution_agent.core import ActionStatus
+# from .memory import pruning  # Starts background task
 
+#imports added by shahd for memory :)
+from .memory.memory_store import get_memory_manager
+from .memory.memory_store import clear_session_memory
+
+
+#-----end of imports by shahd----
 import logging
 from agents.utils.protocol import (
     Channels, AgentMessage, MessageType, AgentType, 
@@ -125,6 +132,14 @@ class CoordinatorState(BaseModel):
     refinement_count: int = 0  # Track how many times we've refined the plan
     completed_task_ids: List[str] = Field(default_factory=list)
     failed_tasks: List[Dict[str, Any]] = Field(default_factory=list)
+    # below is added by shahd and needed for memory :)
+    user_id: Optional[str] = None  #user identifier
+    memory_context: Optional[str] = None  # Compiled context for LLM
+
+
+
+
+
 
 # --- Plan Refinement with LLM ---
 # CHANGE 14: In coordinator_agent.py - refine_plan_with_llm function
@@ -221,8 +236,23 @@ def create_coordinator_graph():
         """STEP 1: Analyze and decompose with root task tracking"""
         raw_task = state["input"]
         session_id = state.get("session_id")
+        user_id= state.get("user_id", "default_user") #han extract el user id
         original_message_id = state.get("original_message_id")
         
+
+        #added by shahd for memory :)
+        memory_mgr = get_memory_manager(user_id, session_id)
+        # memory_context = memory_mgr.get_full_context_for_llm(
+        # current_query=raw_task.get("action", "")
+        # )
+        if len(memory_mgr.short_term.recent_tasks) >10:
+            memory_context = await memory_mgr.get_summarized_context(llm)
+        else:
+            memory_context = memory_mgr.get_full_context_for_llm(
+                current_query=raw_task.get("action", "")
+            )
+        #---end of shahd's code for memory-----
+
         # Store in task state
         task_state.plan_context = {
             "session_id": session_id,
@@ -243,8 +273,12 @@ def create_coordinator_graph():
         # HISTORICAL CONTEXT
         {historical_context}
 
+        # MEMORY CONTEXT
+        {memory_context}
+
         # YOUR TASK
         Analyze the input task description and determine if the decomposition provided is enough. If not then decompose as needed, adding more tasks if needed and creating dependancies between them based on whether they're sequential or parallel:
+        Consider the memory context above when planning (user preferences, recent tasks, current progress).
 
         **SIMPLE TASK** (single action):
         - "open calculator" → Already complete, just add task_id
@@ -455,11 +489,12 @@ def create_coordinator_graph():
         
         # Execute sequential tasks with dependency checking
         task_outputs = {}
+        memory_mgr = task_state.plan_context.get("memory_mgr")  # ← Get manager, added by shahd
+
         
         for task in plan.get("sequential", []):
 
             logger.info(f"🧾 [EXECUTION] Running task JSON:\n{json.dumps(task, indent=2)}")
-
             task_id = task.get("task_id")
 
             # CHANGE 13B: Skip already completed tasks
@@ -493,6 +528,29 @@ def create_coordinator_graph():
             task_state.start_task(task["task_id"])
             result = await execute_single_task(task, session_id, original_message_id)
             
+            #---added by shahd for memory :)
+            # Log to working memory
+            if memory_mgr:
+                memory_mgr.working_memory.log_step(
+                    task_id=task["task_id"],
+                    action=task["action"],
+                    result=result
+                )
+
+                status = result.get("status", "").lower() if isinstance(result, dict) else ""
+                if status == "success":
+                    memory_mgr.short_term_memory.add_task(
+                        task_description=task.get("action", "Unknown Action"),
+                        result_summary=f"Successfully performed {task.get('action')} using {task.get('context', 'local')} strategy."
+                    )
+                    memory_mgr.long_term_memory.add_memory(
+                        content=f"The user successfully asked to open the {task.get('app_name', 'Notepad')} application."
+                    )
+                
+                
+                
+
+            #---end of shahd's code for memory----
             # Track result
             status = result.get("status", "failed")
 
@@ -550,7 +608,22 @@ def create_coordinator_graph():
                         "status": "failed",
                         "message": "Max retry attempts reached" if refinement_count >= MAX_REFINEMENTS else "Task failed"
                     })
-        
+
+                # ---added by shahd for memory :)
+                if memory_mgr:
+                    completed = sum(1 for s in results["completed_tasks"].values() if s == "success")
+                    total = len(results["completed_tasks"])
+
+                    task_desc= state["input"].get("action", "unknown task")
+                    result_summary = f"Completed {completed}/{total} steps"
+
+                    memory_mgr.short_term_memory.add(task_desc, result_summary)
+
+                    #clear working memory after task completion
+                    if results.get("status") !="needs_refinement":
+                        memory_mgr.working_memory.clear()
+                #---end of shahd's code for memory----
+
         return {
             **state,
             "results": results,
@@ -645,8 +718,32 @@ def create_coordinator_graph():
         
             # Store in memory
             if results:
-                memory_entry = f"Task: {state['input'].get('action')} | Success: {len(results.get('sequential_results', []))} steps"
-                short_term_memory.add(memory_entry)
+                # memory_entry = f"Task: {state['input'].get('action')} | Success: {len(results.get('sequential_results', []))} steps"
+                # short_term_memory.add(memory_entry)
+
+                # ---added by shahd for memory :) long term memory storage
+                memory_mgr= task_state.plan_context.get("memory_mgr")  # Get memory manager
+                if memory_mgr:
+                    if completed_count == total_count and total_count > 0:
+                        task_action= state['input'].get('action', '')
+
+                        if 'open' in task_action.lower():
+                            memory_mgr.long_term.store_preference(
+                                preference = f"User successfully executed: {task_action}",
+                                category="task_patterns"
+                            )
+
+                        if len(results.get('sequential_results', [])) > 1:
+                            workflow = " -> ".join([
+                                r["action"] for r in results["sequential_results"]
+                            ])
+                            memory_mgr.long_term.store_preference(
+                                preference = f"Successful workflow: {workflow}",
+                                category="workflows"
+                            )
+
+                #---end of shahd's code for memory----
+                
             
             # Reset task state
             task_state.reset()
@@ -725,12 +822,14 @@ async def start_coordinator_agent(broker_instance):
         logger.info(f"Coordinator received: {message.payload.get('action')}")
 
         http_request_id = message.response_to if message.response_to else message.message_id
+        user_id = message.payload.get("user_id", "default_user")  # Extract user ID, default if missing, added by shahd for memory :)
         
         # Extract session tracking
         state_input = {
             "input": message.payload,
             "session_id": message.session_id,
-            "original_message_id": http_request_id
+            "original_message_id": http_request_id,
+            "user_id": user_id  #added by shahd for memory :)
         }
         
         result = await coordinator_graph.ainvoke(state_input)
@@ -760,11 +859,54 @@ async def start_coordinator_agent(broker_instance):
         if task_id in execution_futures:
             execution_futures[task_id].set_result(message.payload)
     
+    async def handle_session_control(message: AgentMessage):
+        """Handle session management commands"""
+        command = message.payload.get("command")
+        session_id = message.session_id
+        
+        if command == "start_new_chat":
+            clear_session_memory(session_id)
+            logger.info(f"Started new chat for session {session_id}")
+
+            confirm_msg = AgentMessage(
+                message_type=MessageType.TASK_RESPONSE,
+                sender=AgentType.COORDINATOR,
+                receiver=AgentType.LANGUAGE,
+                session_id=session_id,
+                response_to=message.message_id,
+                payload={
+                    "status": "Success",    
+                    "response": "Started a new conversation. Previous session memory cleared.previous session memory cleared."
+                }
+            )
+            await broker_instance.publish(Channels.COORDINATOR_TO_LANGUAGE, confirm_msg)
+
+    # by shahd
+    async def handle_preference_storage(message: AgentMessage):
+        """Handle preference storage requests"""
+        session_id = message.session_id
+        user_id = message.payload.get("user_id", "default_user")
+        preference = message.payload.get("preference")
+        category = message.payload.get("category", "explicit")
+        
+        memory_mgr = get_memory_manager(user_id, session_id)
+        memory_mgr.long_term.store_preference(preference, category)
+        
+        logger.info(f"Stored preference for user {user_id} in session {session_id}: {preference} [{category}]")
+    #end of shahd 
+        
+    
     # Subscribe to channels
     broker_instance.subscribe(Channels.LANGUAGE_TO_COORDINATOR, handle_task_from_language)
     broker_instance.subscribe(Channels.EXECUTION_TO_COORDINATOR, handle_execution_result)
-    
+    # Subscribe to channels
+    broker_instance.subscribe(Channels.SESSION_CONTROL, handle_session_control)  # ← NEW
+    broker_instance.subscribe(Channels.PREFERENCE_STORAGE, handle_preference_storage)  # by shahd
     logger.info("✅ Coordinator Agent started")
     
     while True:
         await asyncio.sleep(1)
+    
+    
+    
+    

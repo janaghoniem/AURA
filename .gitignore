@@ -72,3 +72,10 @@ audit.json
 /backend/agents/execution_agent/data
 backend/conversations.jsonl
 
+/backend/agents/execution_agent/data
+/backend/agents/execution_agent/RAG/models
+
+/backend/agents/execution_agent/RAG/vectordb
+/backend/agents/execution_agent/RAG/rag_data
+/backend/agents/execution_agent/RAG/sandbox_logs
+
