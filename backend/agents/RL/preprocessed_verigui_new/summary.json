@@ -1,0 +1,12 @@
+{
+  "generated_at": "2025-12-01T01:45:49.832107",
+  "n_total": 302,
+  "n_train": 211,
+  "n_val": 45,
+  "n_test": 46,
+  "agent_types": [
+    "language_agent",
+    "execution_agent",
+    "reasoning_agent"
+  ]
+}
