@@ -16,7 +16,7 @@ from groq import Groq # Added Groq import
 from agents.utils.protocol import Channels
 from agents.utils.broker import broker
 from agents.utils.protocol import AgentMessage, MessageType, AgentType, ClarificationMessage
-from agents.coordinator_agent.memory.memory_store import get_memory_manager # Ensure import
+# from agents.coordinator_agent.memory.memory_store import get_memory_manager # Ensure import
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # -----------------------
 # CONFIG - GROQ API (Updated)
 # -----------------------
-GROQ_API_KEY = os.environ.get("GROQ_LANGUAGE_KEY") 
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
 MODEL_NAME = "llama-3.3-70b-versatile"  # High-performance Groq model
 client = Groq(api_key=GROQ_API_KEY)
 
@@ -173,6 +173,8 @@ class TaskCoordinationAgent:
         self.save_path = CONV_SAVE_PATH
         self.tasks_path = TASKS_SAVE_PATH
 
+        self.system_prompt = {"role":"system","content":SYSTEM_PROMPT}
+
     def save_memory(self):
         append_jsonl(self.save_path, {
             "id": uuid.uuid4().hex,
@@ -216,7 +218,7 @@ class TaskCoordinationAgent:
             sender=AgentType.LANGUAGE,
             receiver=AgentType.COORDINATOR,
             response_to=http_request_id,
-            payload=task
+            payload={"tasks": task}
         )
         await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, task_msg)
 
@@ -265,17 +267,88 @@ async def start_language_agent(broker):
         session_id = message.session_id if hasattr(message, 'session_id') else "default_session"
         http_request_id = message.message_id if hasattr(message, 'message_id') else str(uuid.uuid4())
         
-        memory_mgr = get_memory_manager(user_id, session_id)
-        memory_context = memory_mgr.get_full_context_for_llm(current_query=input_text)
-        
-        if memory_context:
+
+        # # NEW: Fetch Mem0 preferences for this user
+        # try:
+        #     from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
+        #     pref_mgr = get_preference_manager(user_id)
+        #     preferences = pref_mgr.get_relevant_preferences(input_text, limit=5)
+        #     preferences_context = pref_mgr.format_for_llm(preferences)
+        #     print(f"🧠 Retrieved Mem0 Preferences:\n{preferences_context}\n")
+            
+        #     # FIXED: Temporarily add preferences for THIS turn only
+        #     # Remove old preference entries first
+        #     agent.memory = [m for m in agent.memory if not m.get("content", "").startswith("User Preferences:")]
+            
+        #     # Add fresh preferences at position 1 (after system prompt)
+        #     if preferences and preferences_context != "No stored user preferences.":
+        #         agent.memory.insert(1, {
+        #             "role": "system", 
+        #             "content": f"{preferences_context}"
+        #         })
+        # except Exception as e:
+        #     logger.error(f"❌ Failed to fetch preferences: {e}")
+        #     preferences_context = "No stored preferences."
+        # NEW: Fetch Mem0 preferences AND conversation history for this user
+        try:
+            from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
+            pref_mgr = get_preference_manager(user_id)
+            
+            # Fetch both preferences and conversation history
+            all_memories = pref_mgr.get_relevant_preferences(input_text, limit=10)
+            
+            # Separate into preferences and conversation history
+            preferences = []
+            conversation_history = []
+            
+            for memory in all_memories:
+                if isinstance(memory, dict):
+                    category = memory.get('metadata', {}).get('category', 'general')
+                    memory_text = memory.get('memory') or memory.get('text') or str(memory)
+                elif isinstance(memory, str):
+                    memory_text = memory
+                    category = 'general'
+                else:
+                    continue
+                
+                if 'conversation_history' in str(category):
+                    conversation_history.append(memory_text)
+                else:
+                    preferences.append(memory_text)
+            
+            # Build context for LLM
+            context_parts = []
+            
+            if preferences:
+                context_parts.append("# USER PREFERENCES")
+                for i, pref in enumerate(preferences[:5], 1):
+                    context_parts.append(f"{i}. {pref}")
+            
+            if conversation_history:
+                context_parts.append("\n# RECENT CONVERSATIONS")
+                for i, conv in enumerate(conversation_history[:3], 1):
+                    context_parts.append(f"{i}. {conv}")
+            
+            memory_context = "\n".join(context_parts) if context_parts else "No previous context."
+            
             print(f"🧠 Retrieved Memory Context:\n{memory_context}\n")
-            agent.memory.insert(1, {"role": "system", "content": f"Recent Memory:\n{memory_context}"})
+            
+            # Inject context into agent's memory
+            if context_parts:
+                agent.memory.insert(1, {
+                    "role": "system", 
+                    "content": f"Previous Context:\n{memory_context}"
+                })
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch memory: {e}")
+            memory_context = "No stored context."
+       
 
         response, is_complete = agent.user_turn(input_text)
         print(f"🤖 Agent: {response}\n")
         
         if is_complete:
+            agent.memory.append({"role": "system", "content": f"user_id: {user_id}"})
             await agent.decompose_task(http_request_id=http_request_id)
         else:
             clarification_msg = AgentMessage(
