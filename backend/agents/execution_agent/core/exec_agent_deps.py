@@ -6,6 +6,12 @@ Author: Accessibility AI Team
 Version: 1.0.0
 """
 
+# Stub classes for missing dependencies
+class _StubClass:
+    """Placeholder for unavailable dependencies"""
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(f"{self.__class__.__name__} is not available. Install the required package.")
+
 # Check for optional dependencies
 try:
     import pywinauto
@@ -14,12 +20,16 @@ try:
     PYWINAUTO_AVAILABLE = True
 except ImportError:
     PYWINAUTO_AVAILABLE = False
+    Application = _StubClass
+    Desktop = _StubClass
+    UIAWrapper = _StubClass
 
 try:
     import pyautogui
     PYAUTOGUI_AVAILABLE = True
 except ImportError:
     PYAUTOGUI_AVAILABLE = False
+    pyautogui = None
 
 try:
     from selenium import webdriver
@@ -29,12 +39,17 @@ try:
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
+    webdriver = None
+    By = _StubClass
+    WebDriverWait = _StubClass
+    EC = _StubClass
 
 try:
     from playwright.sync_api import sync_playwright
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
+    sync_playwright = None
 
 try:
     import pytesseract
@@ -42,6 +57,8 @@ try:
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
+    pytesseract = None
+    Image = None
 
 
 def check_dependencies(logger):

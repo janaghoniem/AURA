@@ -186,17 +186,25 @@ function App() {
         throw new Error(data.detail || "TTS failed");
       }
 
-      const audioBlob = await fetch(
-        `data:audio/wav;base64,${data.audio_data}`
-      ).then((r) => r.blob());
+      // Convert base64 to blob correctly
+      const binaryString = atob(data.audio_data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const audioBlob = new Blob([bytes], { type: "audio/wav" });
 
       const url = URL.createObjectURL(audioBlob);
+      console.log("[TTS] Audio blob created, URL:", url);
+      
       audioRef.current.src = url;
 
       audioRef.current.oncanplaythrough = async () => {
         console.log("[TTS] Audio ready, playing...");
         setOrbState("speaking");
-        await audioRef.current.play();
+        await audioRef.current.play().catch(err => {
+          console.error("[TTS] Play error:", err);
+        });
       };
 
       audioRef.current.onended = () => {
