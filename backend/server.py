@@ -99,10 +99,41 @@ app.add_middleware(
 # HTTP API Endpoints
 # ============================================================================
 
+import re
+
+def detect_language(text: str) -> str:
+    """
+    Detect if text is primarily Arabic or English
+    Returns: 'arabic', 'english', or 'mixed'
+    """
+    # Count Arabic characters
+    arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
+    # Count English letters
+    english_chars = len(re.findall(r'[a-zA-Z]', text))
+    
+    total_chars = arabic_chars + english_chars
+    if total_chars == 0:
+        return 'english'  # Default to English for numbers/symbols only
+    
+    arabic_ratio = arabic_chars / total_chars
+    
+    if arabic_ratio > 0.7:
+        return 'arabic'
+    elif arabic_ratio < 0.3:
+        return 'english'
+    else:
+        return 'mixed'
+
+
 @app.post("/text-to-speech")
 async def text_to_speech(request: Request):
     """
-    Convert text to speech using Groq TTS
+    Convert text to speech using Groq TTS with intelligent language detection
+    
+    Automatically selects the appropriate voice based on text content:
+    - Primarily Arabic text → orpheus-arabic-saudi
+    - Primarily English text → orpheus-english
+    - Mixed text → Uses the voice specified or defaults based on majority language
     
     Returns base64-encoded WAV audio
     """
@@ -115,20 +146,51 @@ async def text_to_speech(request: Request):
         
         data = await request.json()
         text = data.get("text", "").strip()
-        voice_name = data.get("voice_name", "orpheus-english")  # Default voice
+        voice_name = data.get("voice_name")  # Optional - auto-detect if not provided
+        force_voice = data.get("force_voice", False)  # Override auto-detection
+        
+        if not text:
+            logger.error("❌ No text provided for TTS")
+            raise HTTPException(status_code=400, detail="Missing 'text' field")
+        
+        # Auto-detect language if voice not specified or not forcing
+        if not voice_name or not force_voice:
+            detected_lang = detect_language(text)
+            logger.info(f"🔍 Detected language: {detected_lang}")
+            
+            if not force_voice:
+                # Auto-select voice based on detected language
+                if detected_lang == 'arabic':
+                    voice_name = 'orpheus-arabic'
+                    logger.info("🎤 Auto-selected Arabic voice")
+                elif detected_lang == 'mixed':
+                    # For mixed, prefer Arabic voice if more than 30% Arabic
+                    arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
+                    total_alpha = len(re.findall(r'[\u0600-\u06FFa-zA-Z]', text))
+                    if total_alpha > 0 and arabic_chars / total_alpha > 0.3:
+                        voice_name = 'orpheus-arabic'
+                        logger.info("🎤 Auto-selected Arabic voice for mixed text")
+                    else:
+                        voice_name = 'orpheus-english'
+                        logger.info("🎤 Auto-selected English voice for mixed text")
+                else:
+                    voice_name = 'orpheus-english'
+                    logger.info("🎤 Auto-selected English voice")
+        
+        # Default to English if still not set
+        if not voice_name:
+            voice_name = 'orpheus-english'
         
         # Map voice names to Groq model IDs
         voice_mapping = {
             "orpheus-english": "orpheus-english",
             "orpheus-arabic": "orpheus-arabic-saudi",
-            "Gacrux": "orpheus-english"  # Fallback for old voice name
+            "arabic": "orpheus-arabic-saudi",  # Alias
+            "english": "orpheus-english",  # Alias
+            "Gacrux": "orpheus-english"  # Legacy fallback
         }
         
         groq_voice = voice_mapping.get(voice_name, "orpheus-english")
-        
-        if not text:
-            logger.error("❌ No text provided for TTS")
-            raise HTTPException(status_code=400, detail="Missing 'text' field")
         
         logger.info(f"🗣️ Generating speech for text: '{text[:50]}...'")
         logger.info(f"🎤 Using voice: {groq_voice}")
@@ -151,7 +213,9 @@ async def text_to_speech(request: Request):
             "status": "success",
             "audio_data": base64_audio,
             "format": "wav",
-            "sample_rate": 24000  # Groq default
+            "sample_rate": 24000,  # Groq default
+            "voice_used": groq_voice,
+            "detected_language": detect_language(text)
         }
         
     except HTTPException:
@@ -160,11 +224,14 @@ async def text_to_speech(request: Request):
         logger.error(f"❌ TTS error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
 
-
 @app.post("/transcribe")
 async def transcribe_audio(request: Request):
     """
-    Transcribed audio using Groq Whisper API - Automatically deletes audio after processing
+    Transcribe audio using Groq Whisper API with multilingual support (Arabic + English)
+    Automatically deletes audio after processing
+    
+    NOTE: This is STT (Speech-to-Text). For TTS (Text-to-Speech) in Arabic, 
+    use the /text-to-speech endpoint with voice_name="orpheus-arabic"
     """
     try:
         logger.info("🎤 Received audio transcription request")
@@ -195,18 +262,33 @@ async def transcribe_audio(request: Request):
             temp_path = temp_audio.name
 
         try:
-            # Transcribe using Groq Whisper
+            # Multilingual prompt for Arabic + English transcription
+            # Whisper uses the prompt as context/guidance for transcription style
+            bilingual_prompt = (
+                "Transcribe exactly as spoken. "
+                "Keep Arabic and English words mixed as-is. "
+                "Do not translate between languages. "
+                "افتح calculator, open التطبيق"
+            )
+            
+            # Transcribe using Groq Whisper with multilingual support
             with open(temp_path, "rb") as audio_file:
                 transcription = groq_client.audio.transcriptions.create(
                     file=(f"audio{file_extension}", audio_file),
                     model=model,
-                    prompt="", 
+                    prompt=bilingual_prompt,  # Guide Whisper to preserve multilingual content
                     response_format="text",
-                    language="en", 
+                    language="ar",  # Set to Arabic to better detect mixed content
                     temperature=0.0 
                 )
 
             transcript = transcription.strip()
+            
+            # Check for empty or silent audio
+            if not transcript or len(transcript) < 2:
+                logger.warning("⚠️ Empty or silent audio detected")
+                transcript = "Couldn't catch that. Please try again."
+            
             logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
 
             return {
@@ -224,7 +306,6 @@ async def transcribe_audio(request: Request):
     except Exception as e:
         logger.error(f"❌ Transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-    
     
 @app.post("/process")
 async def process_user_input(request: Request):
