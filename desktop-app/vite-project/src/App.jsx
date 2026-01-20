@@ -113,6 +113,24 @@ function App() {
     }
   };
 
+  /* ---------- DIRECT TEXT (SKIP STT) ---------- */
+  const handleTextSubmit = async (text) => {
+    try {
+      console.log("[UI] Text submitted:", text);
+
+      setOrbState("processing");
+      setUserMessage(text);
+
+      // Skip STT completely → go directly to agent
+      await processText(text);
+
+    } catch (error) {
+      console.error("[UI] Text submit error:", error);
+      setOrbState("idle");
+      setAssistantMessage("Failed to send message");
+    }
+  };
+
   /* ---------- TEXT → AGENT ---------- */
   const processText = async (text) => {
     try {
@@ -247,6 +265,7 @@ function App() {
             onCancel={handleCancel}
             chatMode={chatMode}
             setChatMode={setChatMode}
+            onSendText={handleTextSubmit}
           />
         </div>
       </main>
