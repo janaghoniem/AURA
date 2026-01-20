@@ -225,6 +225,7 @@ async def transcribe_audio(request: Request):
         logger.error(f"❌ Transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
     
+    
 @app.post("/process")
 async def process_user_input(request: Request):
     """
