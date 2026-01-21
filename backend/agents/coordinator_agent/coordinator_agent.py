@@ -165,8 +165,6 @@ class CoordinatorState(BaseModel):
     original_message_id: Optional[str] = None
     user_id: Optional[str] = None
     preferences_context: Optional[str] = None
-    needs_clarification: bool = False
-    clarification_question: Optional[str] = None
 
 # --- Plan Decomposition with Groq LLM ---
 async def decompose_task_to_actions(
@@ -182,6 +180,59 @@ async def decompose_task_to_actions(
 
 # USER PREFERENCES
 {preferences_context}
+
+============================
+CORE BEHAVIOR RULES
+============================
+
+1. NEVER generate conversational, acknowledgment, confirmation, planning, preparation, or meta tasks.
+
+❌ INVALID tasks include:
+- "Confirm receipt of the request"
+- "Prepare to execute the task"
+- "Pass the request to another agent"
+- "Wait for user input"
+- "Acknowledge user command"
+- "Analyze the request"
+- "Decide what to do next"
+
+✅ Every task MUST represent a real-world executable operation or a reasoning operation with concrete output.
+
+2. Detect SIMPLE vs COMPOSITE requests:
+
+A SIMPLE request:
+- Can be completed by a single real-world action
+- Has no logical sub-steps
+- Has no dependencies
+- Produces no intermediate artifacts
+
+Examples:
+- "Open Notepad"
+- "Open Chrome"
+- "Go to google.com"
+- "Close Calculator"
+- "Scroll down"
+
+➜ For SIMPLE requests:
+- Return EXACTLY ONE task
+- DO NOT decompose
+- ai_prompt must be the original user instruction verbatim or lightly normalized
+
+A COMPOSITE request:
+- Requires multiple real actions
+- Produces intermediate outputs
+- Has dependencies between steps
+- Involves chaining reasoning + actions
+
+Examples:
+- "Download my Moodle assignment and summarize it in Notepad"
+- "Find the cheapest flight and save it in a file"
+- "Scrape reviews and analyze sentiment"
+
+➜ Only COMPOSITE requests may be decomposed.
+
+3. Always prefer the MINIMAL valid execution plan.
+Never split tasks unless strictly required for execution or dependency correctness.
 
 # YOUR TASK
 Decompose the request into the SMALLEST possible tasks. Each task should be:
@@ -210,8 +261,26 @@ Each task must have:
 - **sequential**: Task B depends on Task A's completion (use "depends_on")
 - **parallel**: Tasks can run simultaneously (no "depends_on")
 
-# EXAMPLE DECOMPOSITION
-Request: "Download latest Moodle assignment and summarize it to notepad"
+============================
+VALID EXAMPLES
+============================
+
+User: "Open Notepad"
+
+Return:
+[
+  {
+    "task_id": "task_1",
+    "ai_prompt": "Open Notepad",
+    "device": "desktop",
+    "context": "local",
+    "target_agent": "action",
+    "extra_params": {"app_name": "notepad.exe"},
+    "depends_on": null
+  }
+]
+
+User: "Download latest Moodle assignment and summarize it to Notepad"
 
 Tasks:
 [
@@ -257,6 +326,7 @@ Tasks:
     "device": "desktop",
     "context": "local",
     "target_agent": "reasoning",
+    "content": "<content from task_4>",
     "extra_params": {{"input_from": "task_4"}},
     "depends_on": "task_4"
   }},
@@ -296,58 +366,82 @@ Tasks:
 4. **No assumptions** - if info is missing (like Moodle password), include placeholder in extra_params
 5. **Parallel opportunities** - identify tasks that can run simultaneously (e.g., task_5 and task_6 above)
 
+============================
+CRITICAL CONSTRAINTS
+============================
+
+You must NEVER generate:
+- setup tasks
+- preparation tasks
+- explanation tasks
+- planning-only tasks
+- acknowledgment tasks
+- system-level reasoning
+- descriptions of what you are doing
+- clarifications or questions
+- assistant-like responses
+
+You must NEVER:
+- Describe the pipeline
+- Talk about agents
+- Ask the user for clarification
+- Explain your output
+
+============================
+OUTPUT RULES
+============================
+
+Return ONLY a valid JSON ARRAY of tasks.
+No wrapping object.
+No markdown.
+No commentary.
+No explanations.
+
 # OUTPUT FORMAT
 Return ONLY valid JSON array of tasks (no markdown, no explanations):
-
-{{
-  "needs_clarification": false,
-  "tasks": [
-    // Array of task objects
-  ]
-}}
-
-OR if missing critical info:
-
-{{
-  "needs_clarification": true,
-  "question": "Which Moodle course should I check?"
-}}
-
+[
+  {{
+    "task_id": <string>,
+    "ai_prompt": <string>,
+    "device": <"desktop" | "mobile">,
+    "context": <"local" | "web">,
+    "target_agent": <"action" | "reasoning">,
+    "extra_params": <object>,
+    "depends_on": <string | null>
+  }},
+  ...
+]
 Generate the task decomposition now:"""
 
     try:
         response = await llm.ainvoke(prompt)
         response_text = response.content if hasattr(response, 'content') else str(response)
-        
-        # Clean markdown
         response_text = response_text.strip()
+
         if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        
-        plan = json.loads(response_text.strip())
-        
-        if plan.get("needs_clarification"):
-            return {
-                "needs_clarification": True,
-                "question": plan["question"]
-            }
-        
-        # Validate and create ActionTask objects
-        action_tasks = [ActionTask(**task) for task in plan.get("tasks", [])]
-        
+            parts = response_text.split("```")
+            response_text = parts[1] if len(parts) > 1 else response_text
+            if response_text.strip().startswith("json"):
+                response_text = response_text.strip()[4:]
+
+        parsed = json.loads(response_text.strip())
+
+        # ✅ FIX: Accept list OR wrapped object
+        if isinstance(parsed, list):
+            action_tasks = [ActionTask(**task) for task in parsed]
+        elif isinstance(parsed, dict) and "tasks" in parsed:
+            action_tasks = [ActionTask(**task) for task in parsed["tasks"]]
+        else:
+            raise ValueError("Invalid task decomposition format")
+
         logger.info(f"📋 Decomposed into {len(action_tasks)} tasks")
-        return {
-            "needs_clarification": False,
-            "tasks": action_tasks
-        }
+        return {"tasks": action_tasks}
+
         
     except Exception as e:
         logger.error(f"❌ Task decomposition failed: {e}")
         return {
-            "needs_clarification": True,
-            "question": "I couldn't understand the request. Could you rephrase it?"
+            "error": str(e)
         }
 
 # --- Orchestration Graph ---
@@ -375,18 +469,6 @@ def create_coordinator_graph():
         # Decompose task
         plan_result = await decompose_task_to_actions(raw_task, preferences_context)
         
-        if plan_result.get("needs_clarification"):
-            return {
-                "input": state["input"],
-                "needs_clarification": True,
-                "clarification_question": plan_result["question"],
-                "status": "needs_clarification",
-                "session_id": session_id,
-                "original_message_id": original_message_id,
-                "user_id": user_id,
-                "preferences_context": preferences_context
-            }
-        
         tasks = plan_result.get("tasks", [])
         
         return {
@@ -397,7 +479,6 @@ def create_coordinator_graph():
             "original_message_id": original_message_id,
             "user_id": user_id,
             "preferences_context": preferences_context,
-            "needs_clarification": False
         }
 
     async def execute_tasks(state: Dict) -> Dict:
@@ -606,8 +687,6 @@ Extract now:"""
     graph.set_entry_point("analyze")
 
     def route_after_analysis(state):
-        if state.get("needs_clarification"):
-            return END
         return "execute"
 
     graph.add_conditional_edges("analyze", route_after_analysis)
