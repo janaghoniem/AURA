@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-smart_agent_gemini.py - GEMINI API VERSION
+language_agent.py - GROQ API VERSION
 
-TASK COORDINATION AGENT — Gemini-2.0-Flash-Exp
+TASK COORDINATION AGENT — Llama-3.3-70b-Versatile
 - Full LLM-driven conversation (no hardcoded logic)
 - LLM detects vagueness and when enough info is gathered
 - LLM extracts all information and creates JSON
@@ -10,30 +10,24 @@ TASK COORDINATION AGENT — Gemini-2.0-Flash-Exp
 
 import os, re, json, uuid, time, sys
 from typing import List, Dict
-import requests
-
-
-##ADDED BY JANA BEGIN
 import asyncio
 import logging
+from groq import Groq # Added Groq import
 from agents.utils.protocol import Channels
 from agents.utils.broker import broker
 from agents.utils.protocol import AgentMessage, MessageType, AgentType, ClarificationMessage
-from agents.coordinator_agent.memory.memory_store import get_memory_manager # Ensure import
+# from agents.coordinator_agent.memory.memory_store import get_memory_manager # Ensure import
 from dotenv import load_dotenv
 
-
 load_dotenv()
-
 logger = logging.getLogger(__name__)
-##ADDED BY JANA END
 
 # -----------------------
-# CONFIG - GEMINI API
+# CONFIG - GROQ API (Updated)
 # -----------------------
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Set: export GEMINI_API_KEY=your_key
-MODEL_NAME = "gemini-2.5-flash"  # Smartest fast model
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
+MODEL_NAME = "llama-3.3-70b-versatile"  # High-performance Groq model
+client = Groq(api_key=GROQ_API_KEY)
 
 CONV_SAVE_PATH = "conversations.jsonl"
 TASKS_SAVE_PATH = "tasks.jsonl"
@@ -53,77 +47,31 @@ def append_jsonl(path: str, obj: dict):
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 # -----------------------
-# Gemini API Call
+# Groq API Call (Replaces Gemini)
 # -----------------------
-def call_gemini_api(messages: List[Dict[str, str]], max_tokens=MAX_TOKENS) -> str:
-    """Call Google Gemini API"""
-    
-    if not GEMINI_API_KEY:
-        raise ValueError("⚠️  GEMINI_API_KEY not set! Run: export GEMINI_API_KEY=your_key")
-    
-    # Convert messages to Gemini format
-    # Gemini uses: system instruction + contents (user/model pairs)
-    system_instruction = None
-    contents = []
-    
-    for msg in messages:
-        if msg['role'] == 'system':
-            system_instruction = msg['content']
-        elif msg['role'] == 'user':
-            contents.append({
-                "role": "user",
-                "parts": [{"text": msg['content']}]
-            })
-        elif msg['role'] == 'assistant':
-            contents.append({
-                "role": "model",
-                "parts": [{"text": msg['content']}]
-            })
-    
-    # Build payload
-    payload = {
-        "contents": contents,
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            "temperature": 0.1,        
-            "topP": 0.9,
-        }
-    }
-    
-    # Add system instruction if present
-    if system_instruction:
-        payload["systemInstruction"] = {
-            "parts": [{"text": system_instruction}]
-        }
+def call_groq_api(messages: List[Dict[str, str]], max_tokens=MAX_TOKENS) -> str:
+    """Call Groq API using OpenAI-compatible format"""
+    if not GROQ_API_KEY:
+        raise ValueError("⚠️  GROQ_API_KEY not set in .env!")
     
     try:
-        response = requests.post(
-            f"{API_URL}?key={GEMINI_API_KEY}",
-            headers={"Content-Type": "application/json"},
-            json=payload,
-            timeout=30
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.1, # Kept low for consistent task detection
+            top_p=0.9,
+            stream=False
         )
-        response.raise_for_status()
-        
-        result = response.json()
-        
-        # Extract text from Gemini response
-        if "candidates" in result and len(result["candidates"]) > 0:
-            candidate = result["candidates"][0]
-            if "content" in candidate and "parts" in candidate["content"]:
-                text = candidate["content"]["parts"][0].get("text", "")
-                return sanitize_text(text)
-        
-        return ""
+        text = completion.choices[0].message.content
+        return sanitize_text(text)
             
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️  API Error: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"    Response: {e.response.text}")
+    except Exception as e:
+        print(f"⚠️  Groq API Error: {e}")
         return ""
 
 # -----------------------
-# System Prompts - LLM-DRIVEN
+# System Prompts - LLM-DRIVEN (Preserved Exactly)
 # -----------------------
 SYSTEM_PROMPT = """You are a TASK COORDINATION AGENT. Your role is to gather information from users and prepare task instructions for execution agents.
 
@@ -176,38 +124,6 @@ Clear Rule:
 - If it's missing WHERE (for downloads/saves) → Ask
 - If it's missing WHO/WHAT (for messages) → Ask
 
-Examples:
-
-User: What is a calculator?
-You: A calculator is an application for performing mathematical calculations. Would you like me to open it?
-
-User: open calculator
-You: TASK_COMPLETE
-
-User: launch notepad
-You: TASK_COMPLETE
-
-User: start chrome
-You: TASK_COMPLETE
-
-User: open word
-You: TASK_COMPLETE
-
-User: search for AI news
-You: TASK_COMPLETE
-
-User: download my assignment
-You: Which assignment file do you need, and where is it located?
-
-User: open the document
-You: Which document would you like to open?
-
-User: open report.docx from downloads
-You: TASK_COMPLETE
-
-User: send a message
-You: What message would you like to send, and to whom?
-
 Remember: 
 - Answer QUESTIONS directly
 - Accept named applications IMMEDIATELY (calculator, notepad, chrome, word, etc.)
@@ -222,126 +138,6 @@ CONVERSATION:
 
 CRITICAL: If the user's request involves MULTIPLE steps, create a JSON ARRAY with multiple tasks.
 If it's a SINGLE step, still return an array with one task.
-
-TASK DECOMPOSITION:
-1. Identify ALL distinct actions in the user's request
-2. Break down complex actions into granular steps (open app → wait → navigate → click → type → send)
-3. Create separate task objects for each action
-4. Set "depends_on" to link sequential tasks
-5. Generate unique task_ids (task_001, task_002, etc.)
-
-CONTEXT DETERMINATION:
-- "local" → Desktop apps (Calculator, Notepad, Word, Excel, PowerPoint, File Explorer, Discord, WhatsApp, ANY desktop application), file operations, keyboard/mouse actions
-- "web" → Browser operations (search, navigate, login, scrape, download from web)
-
-CRITICAL: File operations (open file, save file, move file) = "local" context!
-
-ACTION_TYPE RULES - USE THESE EXACT VALUES:
-
-LOCAL context:
-- "open_app" → For: calculator, notepad, chrome, word, excel, discord, any app name
-- "wait_for_app" → For: waiting for app to load
-- "hotkey" → For: keyboard shortcuts (Ctrl+K, Ctrl+C, etc.)
-- "click_element" → For: clicking UI elements (buttons, channels, items)
-- "type_text" → For: typing text in fields
-- "press_key" → For: single key presses (Enter, Tab, Escape)
-- "wait" → For: pausing between actions
-- "send_message" → For: Discord, WhatsApp messages
-- "join_voice_channel" → For: joining voice channels
-- "leave_voice_channel" → For: leaving voice channels
-
-WEB context:
-- "navigate" → For: opening URLs, web searches
-- "login" → For: logging into websites
-- "download" → For: downloading from web
-- "fill_form" → For: filling web forms
-- "open_browser" → For: opening web browsers
-- "close_browser" → For: closing web browsers
-- "web_search" → For: performing web searches
-- "extract_data" → For: extracting data from web pages
-
-
-PARAMETER STRUCTURE:
-
-Opening applications:
-{{
-    "action_type": "open_app",
-    "app_name": "Discord"
-}}
-
-Wait for app to load:
-{{
-    "action_type": "wait_for_app",
-    "app_name": "Discord",
-    "wait_time": 5
-}}
-
-Hotkey/keyboard shortcut:
-{{
-    "action_type": "hotkey",
-    "keys": ["ctrl", "k"]
-}}
-
-Type text:
-{{
-    "action_type": "type_text",
-    "text": "search text here"
-}}
-
-Press single key:
-{{
-    "action_type": "press_key",
-    "key": "enter"
-}}
-
-Click UI element:
-{{
-    "action_type": "click_element",
-    "element": {{
-        "text": "element name",
-        "type": "button/channel/item"
-    }}
-}}
-
-Wait/pause:
-{{
-    "action_type": "wait",
-    "duration": 3
-}}
-
-Join voice channel:
-{{
-    "action_type": "join_voice_channel",
-    "channel_name": "General Voice"
-}}
-
-Send message:
-{{
-    "action_type": "send_message",
-    "platform": "discord",
-    "server_name": "ServerName",
-    "message": "message text"
-}}
-
-Save file:
-{{
-    "action_type": "save_file",
-    "file_path": "path/to/file",
-    "content": "file content"
-}}
-
-Web search:
-{{
-    "action_type": "navigate",
-    "url": "https://www.bing.com/search?q=search+terms"
-}}
-
-Download from web:
-{{
-    "action_type": "download",
-    "url": "download_url",
-    "download_path": "{{downloads_path}}/filename"
-}}
 
 OUTPUT FORMAT (always an array):
 [
@@ -359,289 +155,6 @@ OUTPUT FORMAT (always an array):
     }}
 ]
 
-FIELD RULES:
-- "task_id": Always empty string ""
-- "depends_on": Empty string "" for all tasks
-- "priority": Always empty string ""
-- "timeout": Always null
-- "retry_count": Always null
-
-SINGLE TASK EXAMPLES:
-
-"open calculator":
-[
-    {{
-        "task_id": "",
-        "action": "open_calculator",
-        "context": "local",
-        "params": {{
-            "action_type": "open_app",
-            "app_name": "Calculator"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": null,
-        "retry_count": null
-    }}
-]
-
-"search for AI news":
-[
-    {{
-        "task_id": "",
-        "action": "search_ai_news",
-        "context": "web",
-        "params": {{
-            "action_type": "navigate",
-            "url": "https://www.bing.com/search?q=AI+news"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": null,
-        "retry_count": null
-    }}
-]
-
-"search on apple on google chrome":
-[
-    {{
-        "task_id": "",
-        "action": "open_chrome",
-        "context": "local",
-        "params": {{
-            "action_type": "open_app",
-            "app_name": "Chrome"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": null,
-        "retry_count": null
-    }},
-    {{
-        "task_id": "",
-        "action": "search_apple",
-        "context": "web",
-        "params": {{
-            "action_type": "navigate",
-            "url": "https://www.bing.com/search?q=apple"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": null,
-        "retry_count": null
-    }}
-]
-
-MULTI-TASK EXAMPLES:
-
-"download my assignment from moodle then open it":
-[
-    {{
-        "task_id": "",
-        "action": "navigate_to_moodle",
-        "context": "web",
-        "params": {{
-            "action_type": "navigate",
-            "url": "https://moodle.university.edu"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "download_assignment",
-        "context": "web",
-        "params": {{
-            "action_type": "download",
-            "url": "moodle_assignment_url",
-            "download_path": "{{downloads_path}}/assignment.pdf"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "wait_download_complete",
-        "context": "local",
-        "params": {{
-            "action_type": "wait",
-            "duration": 3
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "open_assignment",
-        "context": "local",
-        "params": {{
-            "action_type": "file_operation",
-            "operation": "open",
-            "file_path": "{{downloads_path}}/assignment.pdf",
-            "file_type": "pdf"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }}
-]
-
-"open discord and send a message to habiba's server":
-[
-    {{
-        "task_id": "",
-        "action": "open_discord",
-        "context": "local",
-        "params": {{
-            "action_type": "open_app",
-            "app_name": "Discord"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "wait_discord_load",
-        "context": "local",
-        "params": {{
-            "action_type": "wait_for_app",
-            "app_name": "Discord",
-            "wait_time": 5
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "open_quick_switcher",
-        "context": "local",
-        "params": {{
-            "action_type": "hotkey",
-            "keys": ["ctrl", "k"]
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "search_server",
-        "context": "local",
-        "params": {{
-            "action_type": "type_text",
-            "text": "habiba'server"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "select_server",
-        "context": "local",
-        "params": {{
-            "action_type": "press_key",
-            "key": "enter"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "wait_server_load",
-        "context": "local",
-        "params": {{
-            "action_type": "wait",
-            "duration": 3
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "find_text_channel",
-        "context": "local",
-        "params": {{
-            "action_type": "click_element",
-            "element": {{
-                "text": "general",
-                "type": "text_channel"
-            }}
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "focus_message_box",
-        "context": "local",
-        "params": {{
-            "action_type": "press_key",
-            "key": "tab"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }},
-    {{
-        "task_id": "",
-        "action": "send_message",
-        "context": "local",
-        "params": {{
-            "action_type": "send_message",
-            "platform": "discord",
-            "server_name": "habiba'server",
-            "message": "Hello from automation!"
-        }},
-        "depends_on": "",
-        "priority": "",
-        "timeout": "",
-        "retry_count": ""
-    }}
-]
-
-GRANULARITY RULES:
-- Break complex actions into atomic steps
-- Include waits after app launches and between major actions
-- Include hotkeys/shortcuts when applicable
-- Include element clicking for UI navigation
-- Include key presses for confirmations
-
-RULES:
-- ALWAYS return a JSON array (even for single tasks)
-- Use "local" for desktop apps and file operations
-- Use "web" for browser operations
-- Use exact action_type values listed above
-- app_name is just the name (Calculator, Notepad, Chrome, Word, Discord)
-- Extract file extensions to file_type
-- ALL fields that should be empty: use empty string ""
-- ALL numeric fields that are unused: use null
-- "task_id": ALWAYS ""
-- "depends_on": ALWAYS ""
-- "priority": ALWAYS ""
-- "timeout": ALWAYS null
-- "retry_count": ALWAYS null
-
 Output ONLY the JSON array. Do not include any explanatory text before or after the JSON."""
 
 # -----------------------
@@ -650,23 +163,19 @@ Output ONLY the JSON array. Do not include any explanatory text before or after 
 class TaskCoordinationAgent:
     def __init__(self):
         print("="*70)
-        print("🤖 TASK COORDINATION AGENT - GEMINI API")
+        print("🤖 TASK COORDINATION AGENT - GROQ API")
         print("="*70)
         print(f"📡 Using: {MODEL_NAME}")
-        print(f"🔑 API Key: {'✓ Set' if GEMINI_API_KEY else '✗ Missing'}")
+        print(f"🔑 API Key: {'✓ Set' if GROQ_API_KEY else '✗ Missing'}")
         print("="*70 + "\n")
-        
-        if not GEMINI_API_KEY:
-            print("⚠️  WARNING: GEMINI_API_KEY not found!")
-            print("   Set it with: export GEMINI_API_KEY=your_key\n")
-            print("   Get your key from: https://aistudio.google.com/app/apikey\n")
         
         self.memory = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.save_path = CONV_SAVE_PATH
         self.tasks_path = TASKS_SAVE_PATH
 
+        self.system_prompt = {"role":"system","content":SYSTEM_PROMPT}
+
     def save_memory(self):
-        """Save conversation to JSONL"""
         append_jsonl(self.save_path, {
             "id": uuid.uuid4().hex,
             "timestamp": int(time.time()),
@@ -674,226 +183,208 @@ class TaskCoordinationAgent:
         })
 
     def check_completion(self, response: str) -> bool:
-        """Check if LLM signals task is complete"""
         return "TASK_COMPLETE" in response
 
     async def decompose_task(self, http_request_id: str):
-        """Let LLM extract information and create JSON"""
-        
         print("\n" + "="*70)
         print("🎯 TASK DECOMPOSITION")
         print("="*70 + "\n")
         
-        # Build conversation history for LLM
         conversation = "\n".join([
             f"{m['role'].upper()}: {m['content']}" 
             for m in self.memory if m['role'] in ['user', 'assistant']
         ])
         
-        # Ask LLM to create the JSON
         decomp_messages = [
             {"role": "system", "content": "You are a task decomposition expert that creates JSON tasks."},
             {"role": "user", "content": DECOMPOSITION_PROMPT.format(conversation=conversation)}
         ]
         
-        print("📊 Asking LLM to analyze conversation and create JSON...")
-        response = call_gemini_api(decomp_messages, max_tokens=500)
+        print("📊 Asking Groq to analyze conversation and create JSON...")
+        response = call_groq_api(decomp_messages, max_tokens=500)
         
-        # Try to extract JSON from response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        json_match = re.search(r'\[.*\]', response, re.DOTALL) # Changed regex to look for Array []
         if json_match:
             try:
                 task = json.loads(json_match.group())
             except json.JSONDecodeError:
-                print("⚠️  LLM response was not valid JSON, using fallback structure\n")
-                task = {
-                    "action": "user_request",
-                    "context": "system",
-                    "strategy": "system",
-                    "params": {
-                        "action_type": conversation[:300],
-                        "file_path": "",
-                        "content": "",
-                        "file_type": ""
-                    },
-                    "task_id": "",
-                    "depends_on": "",
-                    "priority": "",
-                    "timeout": None,
-                    "retry_count": None
-                }
+                task = {"error": "Invalid JSON from LLM"}
         else:
-            print("⚠️  Could not find JSON in LLM response, using fallback\n")
-            task = {
-                "action": "user_request",
-                "context": "system",
-                "strategy": "system",
-                "params": {
-                    "action_type": conversation[:300],
-                    "file_path": "",
-                    "content": "",
-                    "file_type": ""
-                },
-                "task_id": "",
-                "depends_on": "",
-                "priority": "",
-                "timeout": 30,
-                "retry_count": 2
-            }
+            task = {"error": "No JSON found"}
 
-        ##COMMENTED BY JANA BEGIN
-        
-        # # Save to file
-        # append_jsonl(self.tasks_path, {
-        #     "timestamp": int(time.time()),
-        #     "task": task
-        # })
-        
-        # print("📋 Generated Task JSON:")
-        # print(json.dumps(task, indent=2))
-        # print(f"\n💾 Saved to: {self.tasks_path}")
-        # print("="*70 + "\n")
-
-        ##COMMENTED BY JANA END
-
-        ##ADDED BY JANA BEGIN
         logger.info(f"📋 Generated Task JSON: {task} ")
         task_msg = AgentMessage(
             message_type=MessageType.TASK_REQUEST,
             sender=AgentType.LANGUAGE,
             receiver=AgentType.COORDINATOR,
             response_to=http_request_id,
-            # session_id=self.session_id,
-            payload=task  # Put the task dict into the payload
+            payload={"tasks": task}
         )
         await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, task_msg)
-        ##ADDED BY JANA END 
-
-        # return task
 
     def user_turn(self, user_text: str) -> tuple:
-        """Process user input, return (response, is_complete)"""
-        
         user_text = sanitize_text(user_text)
-        
-        # Add user message to memory
         self.memory.append({"role": "user", "content": user_text})
         
-        # Keep only recent history (system + last 10 messages)
         if len(self.memory) > 11:
             self.memory = [self.memory[0]] + self.memory[-10:]
         
-        # Generate response from LLM
         print("   🤔 Thinking...", end=" ", flush=True)
-        response = call_gemini_api(self.memory, max_tokens=200)
+        response = call_groq_api(self.memory, max_tokens=200)
         print("✓")
         
         if not response:
-            response = "I'm having trouble connecting. Please try again."
+            response = "I'm having trouble connecting to Groq. Please check your API key."
             return response, False
         
-        # Check if task is complete
         is_complete = self.check_completion(response)
-        
-        # Clean up response for display (remove TASK_COMPLETE marker)
         display_response = response.replace("TASK_COMPLETE", "").strip()
         if not display_response and is_complete:
             display_response = "Perfect! I have all the information. Creating the task now..."
         
-        # Add assistant response to memory
         self.memory.append({"role": "assistant", "content": response})
-        
-        # Save memory
         self.save_memory()
         
         return display_response, is_complete
     
 ##ADDED BY JANA BEGIN
-# -----------------------
-# Async Agent Starter for Broker
-# -----------------------
 async def start_language_agent(broker):
     agent = TaskCoordinationAgent()
     
     print("="*70)
-    print("🤖 TASK COORDINATION AGENT - READY!")
+    print("🤖 TASK COORDINATION AGENT - READY (GROQ)!")
     print("="*70)
     print("Waiting for user requests...\n")
     
     async def handle_user_input(message: dict):
-        print(f"📝 User said: {message.payload}")
-
-        # Process input with LLM
-        response, is_complete = agent.user_turn(message.payload["input"])
-        http_request_id = message.message_id
-        user_input = message.payload["input"]
-        user_id = message.payload.get("user_id", "default_user")
-        session_id = message.session_id
+        # Allow passing either a dict or an AgentMessage object
+        payload_data = message.payload if hasattr(message, 'payload') else message.get('payload', {})
+        input_text = payload_data.get("input", "")
         
-        memory_mgr=get_memory_manager(user_id,session_id)
-        memory_context=memory_mgr.get_full_context_for_llm(current_query=user_input)
-        print(f"🧠 Retrieved Memory Context:\n{memory_context}\n")
+        print(f"📝 User said: {input_text}")
 
-        if memory_context:
-            memory_instruction = f"\n[MEMORY CONTEXT]\n{memory_context}\n[/MEMORY CONTEXT]\n"
-            agent.memory.insert(1,{"role": "system", "content": f"Recent Memory:\n{memory_context}"})
+        user_id = payload_data.get("user_id", "default_user")
+        session_id = message.session_id if hasattr(message, 'session_id') else "default_session"
+        http_request_id = message.message_id if hasattr(message, 'message_id') else str(uuid.uuid4())
+        
 
-        response, is_complete = agent.user_turn(user_input)
-        # Display response
+        # # NEW: Fetch Mem0 preferences for this user
+        # try:
+        #     from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
+        #     pref_mgr = get_preference_manager(user_id)
+        #     preferences = pref_mgr.get_relevant_preferences(input_text, limit=5)
+        #     preferences_context = pref_mgr.format_for_llm(preferences)
+        #     print(f"🧠 Retrieved Mem0 Preferences:\n{preferences_context}\n")
+            
+        #     # FIXED: Temporarily add preferences for THIS turn only
+        #     # Remove old preference entries first
+        #     agent.memory = [m for m in agent.memory if not m.get("content", "").startswith("User Preferences:")]
+            
+        #     # Add fresh preferences at position 1 (after system prompt)
+        #     if preferences and preferences_context != "No stored user preferences.":
+        #         agent.memory.insert(1, {
+        #             "role": "system", 
+        #             "content": f"{preferences_context}"
+        #         })
+        # except Exception as e:
+        #     logger.error(f"❌ Failed to fetch preferences: {e}")
+        #     preferences_context = "No stored preferences."
+        # NEW: Fetch Mem0 preferences AND conversation history for this user
+        try:
+            from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
+            pref_mgr = get_preference_manager(user_id)
+            
+            # Fetch both preferences and conversation history
+            all_memories = pref_mgr.get_relevant_preferences(input_text, limit=10)
+            
+            # Separate into preferences and conversation history
+            preferences = []
+            conversation_history = []
+            
+            for memory in all_memories:
+                if isinstance(memory, dict):
+                    category = memory.get('metadata', {}).get('category', 'general')
+                    memory_text = memory.get('memory') or memory.get('text') or str(memory)
+                elif isinstance(memory, str):
+                    memory_text = memory
+                    category = 'general'
+                else:
+                    continue
+                
+                if 'conversation_history' in str(category):
+                    conversation_history.append(memory_text)
+                else:
+                    preferences.append(memory_text)
+            
+            # Build context for LLM
+            context_parts = []
+            
+            if preferences:
+                context_parts.append("# USER PREFERENCES")
+                for i, pref in enumerate(preferences[:5], 1):
+                    context_parts.append(f"{i}. {pref}")
+            
+            if conversation_history:
+                context_parts.append("\n# RECENT CONVERSATIONS")
+                for i, conv in enumerate(conversation_history[:3], 1):
+                    context_parts.append(f"{i}. {conv}")
+            
+            memory_context = "\n".join(context_parts) if context_parts else "No previous context."
+            
+            print(f"🧠 Retrieved Memory Context:\n{memory_context}\n")
+            
+            # Inject context into agent's memory
+            if context_parts:
+                agent.memory.insert(1, {
+                    "role": "system", 
+                    "content": f"Previous Context:\n{memory_context}"
+                })
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch memory: {e}")
+            memory_context = "No stored context."
+       
+
+        response, is_complete = agent.user_turn(input_text)
         print(f"🤖 Agent: {response}\n")
         
-        # Auto-decompose if complete
         if is_complete:
-            print("✅ Task information complete!\n")
+            agent.memory.append({"role": "system", "content": f"user_id: {user_id}"})
             await agent.decompose_task(http_request_id=http_request_id)
-            
-            # Reset for next task
-            # agent.memory = [{"role": "system", "content": SYSTEM_PROMPT}]
-            print("🔄 Ready for next task!\n")
         else:
             clarification_msg = AgentMessage(
                 message_type=MessageType.CLARIFICATION_REQUEST,
                 sender=AgentType.LANGUAGE,
-                receiver=AgentType.LANGUAGE, # Or LANGUAGE_OUTPUT, depends on your routing
-                session_id=message.session_id,
-                response_to=message.message_id,
+                receiver=AgentType.LANGUAGE,
+                session_id=session_id,
+                response_to=http_request_id,
                 payload={
                     "question": response,
-                    "context": message.model_dump()
+                    "context": str(message)
                 }
             )
-            
             await broker.publish(Channels.LANGUAGE_OUTPUT, clarification_msg)
         
-        if user_input.lower() in ["new chat", "start new chat", "reset conversation", "clear context"]:
+        if input_text.lower() in ["new chat", "start new chat", "reset conversation", "clear context"]:
             session_control_msg = AgentMessage(
                 message_type=MessageType.SESSION_CONTROL,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.COORDINATOR,
-                session_id=message.session_id,
-                payload={
-                    "command": "start_new_chat"
-                }
+                session_id=session_id,
+                payload={"command": "start_new_chat"}
             )
             await broker.publish(Channels.SESSION_CONTROL, session_control_msg)
-            print("starting a new chat")
             agent.memory = [{"role": "system", "content": SYSTEM_PROMPT}]
-            print("Conversation reset. Ready for new chat!\n")
+            print("Conversation reset.\n")
             return 
         
-        if user_input.lower().startswith("remember that"):
-            preference_text=user_input.replace("remember that","").strip()
-
-            #send to coordinator
+        if input_text.lower().startswith("remember that"):
+            preference_text = input_text.replace("remember that", "").strip()
             pref_msg = AgentMessage(
                 message_type=MessageType.STORE_PREFERENCE,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.COORDINATOR,
-                session_id=message.session_id,
-                payload={
-                    "preference": preference_text,
-                    "category": "explicit"
-                }
+                session_id=session_id,
+                payload={"preference": preference_text, "category": "explicit"}
             )
             await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, pref_msg)
 

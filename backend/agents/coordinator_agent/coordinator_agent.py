@@ -4,12 +4,18 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
+from pymongo import MongoClient
 from ..execution_agent.core import ActionStatus
+from datetime import datetime
 # from .memory import pruning  # Starts background task
 
 #imports added by shahd for memory :)
-from .memory.memory_store import get_memory_manager
-from .memory.memory_store import clear_session_memory
+# NEW: LangGraph MongoDB Checkpointer + Mem0
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from .memory.mem0_manager import get_preference_manager
+from motor.motor_asyncio import AsyncIOMotorClient
+# from .memory.memory_store import get_memory_manager
+# from .memory.memory_store import clear_session_memory
 
 
 #-----end of imports by shahd----
@@ -25,25 +31,52 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # --- Initialize LLM ---
-from .config.settings import LLM_MODEL
+# from .config.settings import LLM_MODEL
 
-llm = ChatGoogleGenerativeAI(
+# llm = ChatGoogleGenerativeAI(
+#     model=LLM_MODEL,
+#     temperature=0.1,
+#     max_output_tokens=2048
+# )
+
+from .config.settings import LLM_MODEL, GROQ_API_KEY, MONGODB_URI
+from langchain_groq import ChatGroq
+
+# Initialize Groq LLM
+llm = ChatGroq(
     model=LLM_MODEL,
     temperature=0.1,
-    max_output_tokens=2048
+    max_tokens=2048,
+    groq_api_key=GROQ_API_KEY
 )
 
-# --- Memory (Simplified for broker) ---
-class SimpleMemory:
-    def __init__(self):
-        self.entries = []
-    def add(self, entry):
-        self.entries.append(entry)
-    def get_relevant_documents(self, query):
-        return []
+# Initialize MongoDB client for LangGraph checkpointer
+try:
+    mongo_client = MongoClient(MONGODB_URI)
+    mongo_client.admin.command('ping')
+    
+    # Specify collection for chat history
+    checkpointer = MongoDBSaver(
+        mongo_client, 
+        db_name="yusr_db",
+        collection_name="langgraph_checkpoints"  # ← NEW
+    )
+    logger.info("✅ Initialized MongoDB checkpointer for LangGraph")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize MongoDB checkpointer: {e}")
+    checkpointer = None
 
-short_term_memory = SimpleMemory()
-long_term_memory = SimpleMemory()
+# --- Memory (Simplified for broker) ---
+# class SimpleMemory:
+#     def __init__(self):
+#         self.entries = []
+#     def add(self, entry):
+#         self.entries.append(entry)
+#     def get_relevant_documents(self, query):
+#         return []
+
+# short_term_memory = SimpleMemory()
+# long_term_memory = SimpleMemory()
 
 # --- Task State Tracking ---
 class TaskState:
@@ -125,18 +158,14 @@ class CoordinatorState(BaseModel):
     input: Dict[str, Any]
     plan: Optional[Dict[str, Any]] = None
     results: Dict[str, Any] = Field(default_factory=dict)
-    # clarification: Optional[str] = None
     status: str = "pending"
     session_id: Optional[str] = None
-    original_message_id: Optional[str] = None  # Track original request
-    refinement_count: int = 0  # Track how many times we've refined the plan
+    original_message_id: Optional[str] = None
+    refinement_count: int = 0
     completed_task_ids: List[str] = Field(default_factory=list)
     failed_tasks: List[Dict[str, Any]] = Field(default_factory=list)
-    # below is added by shahd and needed for memory :)
-    user_id: Optional[str] = None  #user identifier
-    memory_context: Optional[str] = None  # Compiled context for LLM
-
-
+    user_id: Optional[str] = None  # For Mem0 preference management
+    preferences_context: Optional[str] = None  # NEW: Mem0 preferences for LLM
 
 
 
@@ -240,41 +269,30 @@ def create_coordinator_graph():
         original_message_id = state.get("original_message_id")
         
 
-        #added by shahd for memory :)
-        memory_mgr = get_memory_manager(user_id, session_id)
-        # memory_context = memory_mgr.get_full_context_for_llm(
-        # current_query=raw_task.get("action", "")
-        # )
-        if len(memory_mgr.short_term.recent_tasks) >10:
-            memory_context = await memory_mgr.get_summarized_context(llm)
-        else:
-            memory_context = memory_mgr.get_full_context_for_llm(
-                current_query=raw_task.get("action", "")
-            )
+        try:
+            pref_mgr = get_preference_manager(user_id)
+            query = raw_task.get("action", "")
+            
+            # Retrieve preferences
+            preferences = pref_mgr.get_relevant_preferences(query=query, limit=5)
+            
+            logger.info(f"🔍 DEBUG: Retrieved {len(preferences) if preferences else 0} preferences")
+            logger.info(f"🔍 DEBUG: Preferences type: {type(preferences)}")
+            logger.info(f"🔍 DEBUG: Preferences content: {preferences[:2] if preferences else 'None'}")
+            
+            preferences_context = pref_mgr.format_for_llm(preferences)
+            logger.info(f"✅ Retrieved {len(preferences)} preferences for user {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to retrieve preferences for user {user_id}: {e}")
+            preferences_context = "No stored user preferences."
         #---end of shahd's code for memory-----
-
-        # Store in task state
-        task_state.plan_context = {
-            "session_id": session_id,
-            "original_message_id": original_message_id
-        }
-        
-        retrieved_context = long_term_memory.get_relevant_documents(
-            str(raw_task.get("action", ""))
-        )
-        historical_context = "\n".join([doc.page_content for doc in retrieved_context]) if retrieved_context else ""
-        
         # Build decomposition prompt
         prompt = f"""You are the YUSR Coordinator Agent. Decompose user tasks into executable subtasks.
 
         # INPUT FROM LANGUAGE AGENT
         {json.dumps(raw_task, indent=2)}
-
-        # HISTORICAL CONTEXT
-        {historical_context}
-
-        # MEMORY CONTEXT
-        {memory_context}
+        # USER PREFERENCES
+        {preferences_context}
 
         # YOUR TASK
         Analyze the input task description and determine if the decomposition provided is enough. If not then decompose as needed, adding more tasks if needed and creating dependancies between them based on whether they're sequential or parallel:
@@ -409,7 +427,9 @@ def create_coordinator_graph():
                     "clarification": plan["question"],
                     "status": "needs_clarification",
                     "session_id": session_id,
-                    "original_message_id": original_message_id
+                    "original_message_id": original_message_id,
+                    "user_id": user_id,
+                    "preferences_context": preferences_context
                 }
             
             # Mark root tasks vs subtasks
@@ -423,7 +443,9 @@ def create_coordinator_graph():
                     },
                     "status": "ready",
                     "session_id": session_id,
-                    "original_message_id": original_message_id
+                    "original_message_id": original_message_id,
+                    "user_id": user_id,
+                    "preferences_context": preferences_context
                 }
             
             # Complex plan - mark subtasks
@@ -439,7 +461,9 @@ def create_coordinator_graph():
                 "plan": plan,
                 "status": "ready",
                 "session_id": session_id,
-                "original_message_id": original_message_id
+                "original_message_id": original_message_id,
+                "user_id": user_id,
+                "preferences_context": preferences_context
             }
             
         except json.JSONDecodeError as e:
@@ -453,7 +477,9 @@ def create_coordinator_graph():
                 },
                 "status": "ready",
                 "session_id": session_id,
-                "original_message_id": original_message_id
+                "original_message_id": original_message_id,
+                "user_id": user_id,
+                "preferences_context": preferences_context
             }
 
     async def execute_plan(state: Dict) -> Dict:
@@ -529,23 +555,23 @@ def create_coordinator_graph():
             result = await execute_single_task(task, session_id, original_message_id)
             
             #---added by shahd for memory :)
-            # Log to working memory
-            if memory_mgr:
-                memory_mgr.working_memory.log_step(
-                    task_id=task["task_id"],
-                    action=task["action"],
-                    result=result
-                )
+            # Log to working memory - NOT NEEDED ANYMORE MEM0 DOES IT
+            # if memory_mgr:
+            #     memory_mgr.working_memory.log_step(
+            #         task_id=task["task_id"],
+            #         action=task["action"],
+            #         result=result
+            #     )
 
-                status = result.get("status", "").lower() if isinstance(result, dict) else ""
-                if status == "success":
-                    memory_mgr.short_term_memory.add_task(
-                        task_description=task.get("action", "Unknown Action"),
-                        result_summary=f"Successfully performed {task.get('action')} using {task.get('context', 'local')} strategy."
-                    )
-                    memory_mgr.long_term_memory.add_memory(
-                        content=f"The user successfully asked to open the {task.get('app_name', 'Notepad')} application."
-                    )
+            #     status = result.get("status", "").lower() if isinstance(result, dict) else ""
+            #     if status == "success":
+            #         memory_mgr.short_term_memory.add_task(
+            #             task_description=task.get("action", "Unknown Action"),
+            #             result_summary=f"Successfully performed {task.get('action')} using {task.get('context', 'local')} strategy."
+            #         )
+            #         memory_mgr.long_term_memory.add_memory(
+            #             content=f"The user successfully asked to open the {task.get('app_name', 'Notepad')} application."
+            #         )
                 
                 
                 
@@ -610,18 +636,18 @@ def create_coordinator_graph():
                     })
 
                 # ---added by shahd for memory :)
-                if memory_mgr:
-                    completed = sum(1 for s in results["completed_tasks"].values() if s == "success")
-                    total = len(results["completed_tasks"])
+                # if memory_mgr:
+                #     completed = sum(1 for s in results["completed_tasks"].values() if s == "success")
+                #     total = len(results["completed_tasks"])
 
-                    task_desc= state["input"].get("action", "unknown task")
-                    result_summary = f"Completed {completed}/{total} steps"
+                #     task_desc= state["input"].get("action", "unknown task")
+                #     result_summary = f"Completed {completed}/{total} steps"
 
-                    memory_mgr.short_term_memory.add(task_desc, result_summary)
+                #     memory_mgr.short_term_memory.add(task_desc, result_summary)
 
-                    #clear working memory after task completion
-                    if results.get("status") !="needs_refinement":
-                        memory_mgr.working_memory.clear()
+                #     #clear working memory after task completion
+                #     if results.get("status") !="needs_refinement":
+                #         memory_mgr.working_memory.clear()
                 #---end of shahd's code for memory----
 
         return {
@@ -715,39 +741,123 @@ def create_coordinator_graph():
             
             logger.info(f"📤 [FEEDBACK] Sending to Language Agent: {response_text}")
             await broker.publish(Channels.COORDINATOR_TO_LANGUAGE, response_msg)
-        
-            # Store in memory
-            if results:
-                # memory_entry = f"Task: {state['input'].get('action')} | Success: {len(results.get('sequential_results', []))} steps"
-                # short_term_memory.add(memory_entry)
 
-                # ---added by shahd for memory :) long term memory storage
-                memory_mgr= task_state.plan_context.get("memory_mgr")  # Get memory manager
-                if memory_mgr:
-                    if completed_count == total_count and total_count > 0:
-                        task_action= state['input'].get('action', '')
+            # Store in memory (long term preferences)
+            # NEW: LLM-driven preference extraction (only for successful tasks)
+            user_id = state.get("user_id", "default_user")
+            if results and user_id and completed_count == total_count and total_count > 0:
+                try:
+                    pref_mgr = get_preference_manager(user_id)
+                    
+                    # Build context for LLM
+                    task_summary = {
+                        "original_request": state['input'].get('action', ''),
+                        "context": state['input'].get('context', ''),
+                        "completed_steps": [
+                            r.get("action", "") for r in results.get('sequential_results', [])
+                        ],
+                        "total_steps": total_count
+                    }
+                    
+                    # Ask LLM to extract preferences
+                    extraction_prompt = f"""Based on this completed task, extract user preferences that should be remembered for future tasks.
+                    
 
-                        if 'open' in task_action.lower():
-                            memory_mgr.long_term.store_preference(
-                                preference = f"User successfully executed: {task_action}",
-                                category="task_patterns"
-                            )
+            COMPLETED TASK:
+            {json.dumps(task_summary, indent=2)}
 
-                        if len(results.get('sequential_results', [])) > 1:
-                            workflow = " -> ".join([
-                                r["action"] for r in results["sequential_results"]
-                            ])
-                            memory_mgr.long_term.store_preference(
-                                preference = f"Successful workflow: {workflow}",
-                                category="workflows"
-                            )
+            RULES:
+            - Only extract preferences that are likely to repeat (app choices, workflow patterns, communication preferences)
+            - Ignore one-time actions
+            - Format as clear, actionable statements
+            - Return ONLY a JSON array of preference objects
 
-                #---end of shahd's code for memory----
+            OUTPUT FORMAT:
+            [
+                {{
+                    "preference": "User prefers Calculator for math tasks",
+                    "category": "app_usage",
+                    "confidence": "high"
+                }},
+                {{
+                    "preference": "User follows workflow: open Discord -> search server -> send message",
+                    "category": "workflows",
+                    "confidence": "medium"
+                }}
+            ]
+
+            If NO preferences should be stored, return: []
+
+            Generate preference extraction now:"""
+
+                    # Call LLM for preference extraction
+                    extraction_response = await llm.ainvoke(extraction_prompt)
+                    extraction_text = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
+                    
+                    # Clean markdown
+                    extraction_text = extraction_text.strip()
+                    if extraction_text.startswith("```"):
+                        extraction_text = extraction_text.split("```")[1]
+                        if extraction_text.startswith("json"):
+                            extraction_text = extraction_text[4:]
+                    extraction_text = extraction_text.strip()
+                    
+                    # Parse and store preferences
+                    try:
+                        preferences_to_store = json.loads(extraction_text)
+                        
+                        if preferences_to_store and isinstance(preferences_to_store, list):
+                            for pref_obj in preferences_to_store:
+                                if pref_obj.get("confidence") in ["high", "medium"]:
+                                    pref_mgr.add_preference(
+                                        pref_obj["preference"],
+                                        metadata={
+                                            "category": pref_obj.get("category", "general"),
+                                            "confidence": pref_obj.get("confidence", "medium"),
+                                            "extracted_from": task_summary["original_request"]
+                                        }
+                                    )
+                                    logger.info(f"💾 Stored preference: {pref_obj['preference']}")
+                        else:
+                            logger.info("ℹ️ No preferences extracted for this task")
+                            
+                    except json.JSONDecodeError:
+                        logger.warning(f"⚠️ LLM returned invalid JSON for preference extraction")
                 
+                except Exception as e:
+                    logger.error(f"❌ Failed to extract/store preferences: {e}")
+                            #---end of shahd's code for memory----
+            
+        # NEW: Store conversation context for cross-session memory
+        # This runs AFTER preference extraction
+        try:
+            from datetime import datetime
+            
+            conversation_context = f"User requested: {task_summary['original_request']}. "
+            conversation_context += f"Successfully completed {completed_count} steps"
+            
+            if completed_count > 1:
+                workflow_steps = [r.get("action", "") for r in results.get('sequential_results', [])][:3]
+                workflow = " -> ".join(workflow_steps)
+                conversation_context += f". Workflow: {workflow}"
+            
+            # Store in Mem0 with "conversation_history" category
+            pref_mgr.add_preference(
+                conversation_context,
+                metadata={
+                    "category": "conversation_history",
+                    "session_id": session_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "task_type": state['input'].get('context', 'unknown')
+                }
+            )
+            logger.info(f"💾 Stored conversation context: {conversation_context[:100]}...")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to store conversation context: {e}")
             
             # Reset task state
             task_state.reset()
-            
             return {"status": "completed"}
 
     # Build graph
@@ -773,7 +883,7 @@ def create_coordinator_graph():
     graph.add_edge("refine", "execute")  # Retry after refinement
     graph.add_edge("feedback", END)
 
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 async def execute_single_task(task: Dict[str, Any], session_id: str, original_message_id: str) -> Dict[str, Any]:
     """Execute a single task and wait for result"""
@@ -831,8 +941,14 @@ async def start_coordinator_agent(broker_instance):
             "original_message_id": http_request_id,
             "user_id": user_id  #added by shahd for memory :)
         }
-        
-        result = await coordinator_graph.ainvoke(state_input)
+        config = {
+            "configurable":{
+                "thread_id":message.session_id,
+                "user_id": user_id  
+            }
+        }
+
+        result = await coordinator_graph.ainvoke(state_input, config)
         logger.info(f"Coordinator processed task: {result.get('status')}")
         
         # # Send clarification if needed
@@ -865,8 +981,15 @@ async def start_coordinator_agent(broker_instance):
         session_id = message.session_id
         
         if command == "start_new_chat":
-            clear_session_memory(session_id)
-            logger.info(f"Started new chat for session {session_id}")
+            try:
+                await checkpointer.aput(
+                    config={"configurable": {"thread_id": session_id}},
+                    checkpoint=None,
+                    metadata = {"cleared": True}
+                )
+                logger.info(f"Cleared MongoDB session history for {session_id}")
+            except Exception as e:
+                logger.error(f"Failed to clear session history for {session_id}: {e}")
 
             confirm_msg = AgentMessage(
                 message_type=MessageType.TASK_RESPONSE,
@@ -882,17 +1005,17 @@ async def start_coordinator_agent(broker_instance):
             await broker_instance.publish(Channels.COORDINATOR_TO_LANGUAGE, confirm_msg)
 
     # by shahd
-    async def handle_preference_storage(message: AgentMessage):
-        """Handle preference storage requests"""
-        session_id = message.session_id
-        user_id = message.payload.get("user_id", "default_user")
-        preference = message.payload.get("preference")
-        category = message.payload.get("category", "explicit")
+    # async def handle_preference_storage(message: AgentMessage):
+    #     """Handle preference storage requests"""
+    #     session_id = message.session_id
+    #     user_id = message.payload.get("user_id", "default_user")
+    #     preference = message.payload.get("preference")
+    #     category = message.payload.get("category", "explicit")
         
-        memory_mgr = get_memory_manager(user_id, session_id)
-        memory_mgr.long_term.store_preference(preference, category)
+    #     memory_mgr = get_memory_manager(user_id, session_id)
+    #     memory_mgr.long_term.store_preference(preference, category)
         
-        logger.info(f"Stored preference for user {user_id} in session {session_id}: {preference} [{category}]")
+    #     logger.info(f"Stored preference for user {user_id} in session {session_id}: {preference} [{category}]")
     #end of shahd 
         
     
@@ -901,7 +1024,7 @@ async def start_coordinator_agent(broker_instance):
     broker_instance.subscribe(Channels.EXECUTION_TO_COORDINATOR, handle_execution_result)
     # Subscribe to channels
     broker_instance.subscribe(Channels.SESSION_CONTROL, handle_session_control)  # ← NEW
-    broker_instance.subscribe(Channels.PREFERENCE_STORAGE, handle_preference_storage)  # by shahd
+    # broker_instance.subscribe(Channels.PREFERENCE_STORAGE, handle_preference_storage)  # by shahd
     logger.info("✅ Coordinator Agent started")
     
     while True:

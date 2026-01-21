@@ -24,6 +24,7 @@ __pycache__/
 .Python
 env/
 venv/
+aura-venv/
 ENV/
 build/
 develop-eggs/
@@ -79,3 +80,4 @@ backend/conversations.jsonl
 /backend/agents/execution_agent/RAG/rag_data
 /backend/agents/execution_agent/RAG/sandbox_logs
 
+backend/conversations.jsonl

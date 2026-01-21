@@ -1,5 +1,5 @@
 """
-YUSR Main Server - Pub/Sub Architecture
+YUSR Main Server - Pub/Sub Architecture with Groq TTS/STT
 Starts all agents and provides HTTP API for Electron app
 """
 import asyncio
@@ -15,9 +15,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from google import genai
-from google.genai import types
-# import google.generativeai as genai
+from groq import Groq
 
 # Import broker and agents
 from agents.utils.broker import broker
@@ -42,14 +40,15 @@ logger = logging.getLogger(__name__)
 # Store pending responses (for HTTP API)
 pending_responses = {}
 
-# Initialize Google Genai Client
-API_KEY = os.environ.get("GOOGLE_API_KEY")
-if not API_KEY:
-    logger.warning("⚠️ GOOGLE_API_KEY not set - speech transcription will not work")
-    genai_client = None
+# Initialize Groq Client for TTS and STT
+# PUT YOUR GROQ API KEY IN YOUR .env FILE AS: GROQ_API_KEY=your_key_here
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    logger.warning("⚠️ GROQ_API_KEY not set - speech services will not work")
+    groq_client = None
 else:
-    genai_client = genai.Client(api_key=API_KEY)
-    logger.info("✅ Google Genai client initialized")
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    logger.info("✅ Groq client initialized for TTS and STT")
 
 
 @asynccontextmanager
@@ -100,75 +99,123 @@ app.add_middleware(
 # HTTP API Endpoints
 # ============================================================================
 
+import re
+
+def detect_language(text: str) -> str:
+    """
+    Detect if text is primarily Arabic or English
+    Returns: 'arabic', 'english', or 'mixed'
+    """
+    # Count Arabic characters
+    arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
+    # Count English letters
+    english_chars = len(re.findall(r'[a-zA-Z]', text))
+    
+    total_chars = arabic_chars + english_chars
+    if total_chars == 0:
+        return 'english'  # Default to English for numbers/symbols only
+    
+    arabic_ratio = arabic_chars / total_chars
+    
+    if arabic_ratio > 0.7:
+        return 'arabic'
+    elif arabic_ratio < 0.3:
+        return 'english'
+    else:
+        return 'mixed'
+
+
 @app.post("/text-to-speech")
 async def text_to_speech(request: Request):
     """
-    Convert text to speech using Google Gemini TTS
+    Convert text to speech using Groq TTS with intelligent language detection
+    
+    Automatically selects the appropriate voice based on text content:
+    - Primarily Arabic text → orpheus-arabic-saudi
+    - Primarily English text → orpheus-english
+    - Mixed text → Uses the voice specified or defaults based on majority language
     
     Returns base64-encoded WAV audio
     """
     try:
         logger.info("🔊 Received TTS request")
         
-        if not genai_client:
-            logger.error("❌ Google Genai client not initialized")
-            raise HTTPException(status_code=500, detail="TTS service not available - GOOGLE_API_KEY not set")
+        if not groq_client:
+            logger.error("❌ Groq client not initialized")
+            raise HTTPException(status_code=500, detail="TTS service not available - GROQ_API_KEY not set")
         
         data = await request.json()
         text = data.get("text", "").strip()
-        voice_name = data.get("voice_name", "Gacrux")  # Default voice
+        voice_name = data.get("voice_name")  # Optional - auto-detect if not provided
+        force_voice = data.get("force_voice", False)  # Override auto-detection
         
         if not text:
             logger.error("❌ No text provided for TTS")
             raise HTTPException(status_code=400, detail="Missing 'text' field")
         
-        logger.info(f"🗣️ Generating speech for text: '{text[:50]}...'")
-        logger.info(f"🎤 Using voice: {voice_name}")
+        # Auto-detect language if voice not specified or not forcing
+        if not voice_name or not force_voice:
+            detected_lang = detect_language(text)
+            logger.info(f"🔍 Detected language: {detected_lang}")
+            
+            if not force_voice:
+                # Auto-select voice based on detected language
+                if detected_lang == 'arabic':
+                    voice_name = 'orpheus-arabic'
+                    logger.info("🎤 Auto-selected Arabic voice")
+                elif detected_lang == 'mixed':
+                    # For mixed, prefer Arabic voice if more than 30% Arabic
+                    arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
+                    total_alpha = len(re.findall(r'[\u0600-\u06FFa-zA-Z]', text))
+                    if total_alpha > 0 and arabic_chars / total_alpha > 0.3:
+                        voice_name = 'orpheus-arabic'
+                        logger.info("🎤 Auto-selected Arabic voice for mixed text")
+                    else:
+                        voice_name = 'orpheus-english'
+                        logger.info("🎤 Auto-selected English voice for mixed text")
+                else:
+                    voice_name = 'orpheus-english'
+                    logger.info("🎤 Auto-selected English voice")
         
-        # Generate TTS
-        response = genai_client.models.generate_content(
-            model="gemini-2.5-flash-preview-tts",
-            contents=text,
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_name
-                        )
-                    )
-                ),
-            ),
+        # Default to English if still not set
+        if not voice_name:
+            voice_name = 'orpheus-english'
+        
+        # Map voice names to Groq model IDs
+        voice_mapping = {
+            "orpheus-english": "orpheus-english",
+            "orpheus-arabic": "orpheus-arabic-saudi",
+            "arabic": "orpheus-arabic-saudi",  # Alias
+            "english": "orpheus-english",  # Alias
+            "Gacrux": "orpheus-english"  # Legacy fallback
+        }
+        
+        groq_voice = voice_mapping.get(voice_name, "orpheus-english")
+        
+        logger.info(f"🗣️ Generating speech for text: '{text[:50]}...'")
+        logger.info(f"🎤 Using voice: {groq_voice}")
+        
+        # Generate TTS using Groq
+        response = groq_client.audio.speech.create(
+            model=groq_voice,
+            input=text
         )
         
-        # Extract PCM bytes
-        pcm_data = response.candidates[0].content.parts[0].inline_data.data
-        logger.info(f"✅ TTS generated: {len(pcm_data)} bytes of PCM data")
-        
-        # Convert raw PCM to WAV in memory
-        rate = 24000  # Hz
-        channels = 1
-        sample_width = 2  # bytes (16-bit)
-        buffer = io.BytesIO()
-        
-        with wave.open(buffer, "wb") as wf:
-            wf.setnchannels(channels)
-            wf.setsampwidth(sample_width)
-            wf.setframerate(rate)
-            wf.writeframes(pcm_data)
-        
-        buffer.seek(0)
-        wav_bytes = buffer.read()
+        # Read the audio content
+        audio_content = response.read()
+        logger.info(f"✅ TTS generated: {len(audio_content)} bytes of audio data")
         
         # Convert to base64
-        base64_audio = base64.b64encode(wav_bytes).decode('utf-8')
-        logger.info(f"✅ WAV created and encoded: {len(base64_audio)} base64 characters")
+        base64_audio = base64.b64encode(audio_content).decode('utf-8')
+        logger.info(f"✅ Audio encoded: {len(base64_audio)} base64 characters")
         
         return {
             "status": "success",
             "audio_data": base64_audio,
             "format": "wav",
-            "sample_rate": rate
+            "sample_rate": 24000,  # Groq default
+            "voice_used": groq_voice,
+            "detected_language": detect_language(text)
         }
         
     except HTTPException:
@@ -177,122 +224,72 @@ async def text_to_speech(request: Request):
         logger.error(f"❌ TTS error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
 
-
 @app.post("/transcribe")
 async def transcribe_audio(request: Request):
     """
-    Transcribe WAV audio using Google Gemini API
+    Transcribe audio using Groq Whisper API with multilingual support (Arabic + English)
+    Automatically deletes audio after processing
     
-    Accepts base64-encoded .wav audio data, transcribes it, and returns the text.
+    NOTE: This is STT (Speech-to-Text). For TTS (Text-to-Speech) in Arabic, 
+    use the /text-to-speech endpoint with voice_name="orpheus-arabic"
     """
     try:
         logger.info("🎤 Received audio transcription request")
 
-        if not genai_client:
-            logger.error("❌ Google Genai client not initialized")
-            raise HTTPException(status_code=500, detail="Transcription service not available - GOOGLE_API_KEY not set")
+        if not groq_client:
+            logger.error("❌ Groq client not initialized")
+            raise HTTPException(status_code=500, detail="Transcription service not available")
 
         data = await request.json()
         audio_data = data.get("audio_data", "")
         session_id = data.get("session_id", "default")
+        model = data.get("model", "whisper-large-v3")
 
         if not audio_data:
-            logger.error("❌ No audio data provided")
-            raise HTTPException(status_code=400, detail="Missing 'audio_data' field")
-
-        logger.info(f"🔊 Processing audio for session: {session_id}")
-        logger.info(f"📊 Audio data size: {len(audio_data)} bytes (base64)")
+            raise HTTPException(status_code=400, detail="Missing 'audio_data'")
 
         # Decode base64 audio
-        try:
-            audio_bytes = base64.b64decode(audio_data)
-            logger.info(f"✅ Decoded audio: {len(audio_bytes)} bytes")
+        audio_bytes = base64.b64decode(audio_data)
 
-            if len(audio_bytes) < 100:
-                logger.error(f"❌ Audio file too small ({len(audio_bytes)} bytes) - likely empty or corrupt")
-                raise HTTPException(status_code=400, detail="Audio file is empty or too small")
+        # Detect format extension
+        file_extension = ".m4a" 
+        if audio_bytes[:4] == b'RIFF': file_extension = ".wav"
+        elif audio_bytes[:3] == b'ID3': file_extension = ".mp3"
 
-        except Exception as e:
-            logger.error(f"❌ Failed to decode base64 audio: {e}")
-            raise HTTPException(status_code=400, detail="Invalid base64 audio data")
-
-        # Save to temporary WAV file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            temp_file.write(audio_bytes)
-            temp_path = temp_file.name
-            logger.info(f"💾 Saved WAV audio to: {temp_path}")
-            logger.info(f"📁 File size on disk: {os.path.getsize(temp_path)} bytes")
+        # Use tempfile to create a temporary file that we will delete manually
+        with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as temp_audio:
+            temp_audio.write(audio_bytes)
+            temp_path = temp_audio.name
 
         try:
-            # Upload file to Google GenAI
-            logger.info("⬆️ Uploading WAV audio to Google GenAI...")
-            uploaded_file = genai_client.files.upload(file=temp_path)
-            logger.info(f"✅ File uploaded: {uploaded_file.name}")
-            logger.info(f"📊 File state immediately after upload: {uploaded_file.state.name}")
-
-            # Wait for file to become ACTIVE
-            max_wait = 30  # seconds
-            wait_time = 0
-            while uploaded_file.state.name != "ACTIVE" and wait_time < max_wait:
-                logger.info(f"⏳ Waiting for file to become ACTIVE... (current state: {uploaded_file.state.name}, waited {wait_time}s)")
-                time.sleep(2)
-                wait_time += 2
-                uploaded_file = genai_client.files.get(name=uploaded_file.name)
-                logger.info(f"📊 File state after refresh: {uploaded_file.state.name}")
-
-            if uploaded_file.state.name != "ACTIVE":
-                logger.error(f"❌ File failed to become ACTIVE after {max_wait}s. State: {uploaded_file.state.name}")
-                raise Exception(f"File processing timeout. State: {uploaded_file.state.name}")
-
-            logger.info("✅ File is ACTIVE, starting transcription")
-
-            # Generate transcript
-            prompt = """
-You are a bilingual (Arabic + English) speech transcription system.
-
-Your goals:
-1. Transcribe the audio exactly as spoken.
-2. Keep all Arabic and English words as-is. Do NOT translate or correct them.
-3. If a clear command or app name appears (e.g. "open calculator", "افتح calendar", "شغل music"):
-   - Keep the app or command name exactly in English as said.
-   - Do not remove or replace any surrounding Arabic words.
-4. If the user is speaking casually or having a normal conversation, just transcribe it as-is.
-5. If the audio is silent, too noisy, or no words are detected, respond exactly with:
-   "Couldn't catch that. Please try again."
-
-Formatting rules:
-- Output ONLY the raw transcript, nothing else.
-- Keep Arabic and English mixed sentences in their original order.
-- Do NOT add punctuation, translate, or summarize.
-
-Examples:
-- "افتح الكاميرا" → "افتح الكاميرا"
-- "افتح calculator" → "افتح calculator"
-- "I was just testing the mic" → "I was just testing the mic"
-- "افتح calculator بسرعة" → "افتح calculator بسرعة"
-- (silent audio) → "Couldn't catch that. Please try again."
-"""
-
-            response = genai_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[prompt, uploaded_file]
+            # Multilingual prompt for Arabic + English transcription
+            # Whisper uses the prompt as context/guidance for transcription style
+            bilingual_prompt = (
+                "Transcribe exactly as spoken. "
+                "Keep Arabic and English words mixed as-is. "
+                "Do not translate between languages. "
+                "افتح calculator, open التطبيق"
             )
+            
+            # Transcribe using Groq Whisper with multilingual support
+            with open(temp_path, "rb") as audio_file:
+                transcription = groq_client.audio.transcriptions.create(
+                    file=(f"audio{file_extension}", audio_file),
+                    model=model,
+                    prompt=bilingual_prompt,  # Guide Whisper to preserve multilingual content
+                    response_format="text",
+                    language="ar",  # Set to Arabic to better detect mixed content
+                    temperature=0.0 
+                )
 
-            transcript = response.text.strip()
-
-            if not transcript:
-                logger.warning("⚠️ Transcription returned EMPTY text!")
-                transcript = "[Empty transcription - no speech detected]"
-            else:
-                logger.info(f"✅ Transcription successful!")
-                logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
-
-            # Clean up uploaded file
-            try:
-                genai_client.files.delete(name=uploaded_file.name)
-                logger.info(f"🗑️ Deleted uploaded file from Google: {uploaded_file.name}")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not delete uploaded file: {e}")
+            transcript = transcription.strip()
+            
+            # Check for empty or silent audio
+            if not transcript or len(transcript) < 2:
+                logger.warning("⚠️ Empty or silent audio detected")
+                transcript = "Couldn't catch that. Please try again."
+            
+            logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
 
             return {
                 "status": "success",
@@ -301,20 +298,15 @@ Examples:
             }
 
         finally:
-            # Clean up temporary file
-            try:
+            # Ensure the file is deleted immediately after the API call
+            if os.path.exists(temp_path):
                 os.unlink(temp_path)
-                logger.info(f"🗑️ Deleted temporary WAV file: {temp_path}")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to delete temp file: {e}")
+                logger.info(f"🗑️ Deleted temporary file: {temp_path}")
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"❌ Transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-
-
+    
 @app.post("/process")
 async def process_user_input(request: Request):
     """
@@ -519,8 +511,8 @@ async def health_check():
         "service": "YUSR Unified Backend (Pub/Sub)",
         "version": "3.0.0",
         "broker": "running" if broker.running else "stopped",
-        "transcription": "available" if genai_client else "unavailable",
-        "tts": "available" if genai_client else "unavailable"
+        "transcription": "available (Groq Whisper)" if groq_client else "unavailable",
+        "tts": "available (Groq Orpheus)" if groq_client else "unavailable"
     }
 
 

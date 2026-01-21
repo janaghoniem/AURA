@@ -113,6 +113,24 @@ function App() {
     }
   };
 
+  /* ---------- DIRECT TEXT (SKIP STT) ---------- */
+  const handleTextSubmit = async (text) => {
+    try {
+      console.log("[UI] Text submitted:", text);
+
+      setOrbState("processing");
+      setUserMessage(text);
+
+      // Skip STT completely → go directly to agent
+      await processText(text);
+
+    } catch (error) {
+      console.error("[UI] Text submit error:", error);
+      setOrbState("idle");
+      setAssistantMessage("Failed to send message");
+    }
+  };
+
   /* ---------- TEXT → AGENT ---------- */
   const processText = async (text) => {
     try {
@@ -186,17 +204,25 @@ function App() {
         throw new Error(data.detail || "TTS failed");
       }
 
-      const audioBlob = await fetch(
-        `data:audio/wav;base64,${data.audio_data}`
-      ).then((r) => r.blob());
+      // Convert base64 to blob correctly
+      const binaryString = atob(data.audio_data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const audioBlob = new Blob([bytes], { type: "audio/wav" });
 
       const url = URL.createObjectURL(audioBlob);
+      console.log("[TTS] Audio blob created, URL:", url);
+      
       audioRef.current.src = url;
 
       audioRef.current.oncanplaythrough = async () => {
         console.log("[TTS] Audio ready, playing...");
         setOrbState("speaking");
-        await audioRef.current.play();
+        await audioRef.current.play().catch(err => {
+          console.error("[TTS] Play error:", err);
+        });
       };
 
       audioRef.current.onended = () => {
@@ -239,6 +265,7 @@ function App() {
             onCancel={handleCancel}
             chatMode={chatMode}
             setChatMode={setChatMode}
+            onSendText={handleTextSubmit}
           />
         </div>
       </main>

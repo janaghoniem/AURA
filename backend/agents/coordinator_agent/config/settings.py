@@ -14,8 +14,11 @@ RL_FEEDBACK_URL = os.getenv("RL_FEEDBACK_URL", "http://127.0.0.1:8003/feedback")
 LANGUAGE_AGENT_URL = os.getenv("LANGUAGE_AGENT_URL", "http://127.0.0.1:8004/process")
 
 # LLM Configuration
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+#Mongodb configuration (shahd)
+MONGODB_URI = os.getenv("MONGODB_URI")
 
 # Server Configuration
 COORDINATOR_HOST = os.getenv("COORDINATOR_HOST", "0.0.0.0")

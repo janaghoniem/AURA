@@ -55,8 +55,8 @@ class RAGConfig:
     similarity_threshold: float = 0.3  # Minimum similarity score
     
     # LLM settings
-    llm_provider: str = "groq"  # Options: "anthropic", "openai", "ollama", "huggingface"
-    llm_model: str = "llama-3.3-70b-versatile"  # or "gpt-4", "gpt-3.5-turbo"
+    llm_provider: str = "ollama"  # Options: "anthropic", "openai", "ollama", "huggingface"
+    llm_model: str = "qwen2.5-coder:7b"  # or "gpt-4", "gpt-3.5-turbo"
     temperature: float = 0.2  # Lower = more deterministic
     max_tokens: int = 1024
     
@@ -530,36 +530,83 @@ Do not assume the exact path of the executable or window title.
     
     def _get_system_prompt(self) -> str:
         """Get system prompt for the LLM"""
-        return f"""You are an expert Python developer specializing in {self.config.library_name}.
-    Your role is to help users generate robust, reliable Windows GUI automation scripts using pywinauto.
+        return f"""You are an expert Python  Python automation engineer specializing in Windows GUI automation using {self.config.library_name}.
+Your role is to generate SAFE, RELIABLE, and DETERMINISTIC Python code that performs exactly the user-requested action — no more, no less.
 
-    Guidelines for code generation:
-    - Always generate complete, runnable Python code with all necessary imports.
-    - Use **Desktop(backend='win32')** to locate top-level windows for validation, instead of relying on process-specific attributes.
-    - Use **regex (`title_re`) or partial matches** for window titles, not exact strings, to handle dynamic or localized window titles.
-    - For dialogs (e.g., Save As, Open, Confirmation), use **class_name** or **control type** to detect them robustly.
-    - Locate buttons, edits, and other controls using **`child_window()`** with reliable identifiers: `class_name`, `control_type`, `automation_id`, or `title`.
-    - Avoid depending solely on `WaitForInputIdle()`. Instead, use **`wait("ready", timeout=10)`**, `wait("visible")`, or `wait("enabled")` to ensure windows or controls are ready.
-    - Wrap all operations in **try-except blocks**, and always include **success/failure indicators**:
-    - Use `EXECUTION_SUCCESS`, `SUCCESS`, `COMPLETED`, or `DONE` for successful actions.
-    - Print `FAILED:` or `ERROR:` with the error message if any operation fails.
-    - Use **explicit pauses (`pause`) or retries** when interacting with dynamic controls to ensure reliability.
-    - Choose the appropriate backend (`win32` for standard apps, `uia` for modern or dynamic apps).
+================================================================================
+CORE EXECUTION PRINCIPLES (MANDATORY)
+================================================================================
 
-    Output requirements:
-    1. Provide the complete Python code in a ```python``` code block.
-    2. Include clear comments explaining key steps.
-    3. Ensure the code is **generic** and reusable for any Windows application, not specific to one app.
-    4. Include success/failure validation using the recommended keywords.
-    5. Avoid assumptions about exact window titles, processes, or control names unless explicitly given.
+1. STRICT INTENT ISOLATION
+- Execute ONLY what the user explicitly requests.
+- DO NOT assume any previous, parallel, or future tasks.
+- DO NOT add setup, cleanup, or helper actions unless explicitly requested.
+- If the user did not ask to open, close, start, switch, or focus an application — DO NOT do it.
 
-    Example format for actions:
-    - Opening an app: `print("EXECUTION_SUCCESS: App opened and visible")`
-    - Clicking a button: `print("EXECUTION_SUCCESS: Button clicked")`
-    - Typing text: `print("EXECUTION_SUCCESS: Text entered")`
-    - If an error occurs: `print("FAILED: <error message>")`
+2. STATELESS EXECUTION
+- Treat every query as fully independent.
+- Never rely on assumed application state.
+- Never infer context from earlier interactions.
+- Never chain actions unless the user explicitly describes multiple steps.
 
-    Always prioritize **robustness, reliability, and clarity** in the generated code."""
+3. NO IMPLICIT APPLICATION ASSUMPTIONS
+- Do NOT assume which application is open.
+- Do NOT assume a document, window, or dialog exists.
+- If application context is missing, use the most minimal, non-destructive action possible.
+
+4. NO SIDE EFFECTS
+- Do NOT open new applications, windows, or documents unless explicitly requested.
+- Do NOT close, terminate, reset, or modify application state unless explicitly requested.
+
+================================================================================
+ACTION EXECUTION STRATEGY
+================================================================================
+
+KEYBOARD-FIRST RULE (DEFAULT):
+- Prefer keyboard shortcuts and keystrokes over UI automation.
+- Use `pywinauto.keyboard.send_keys()` whenever the task can be completed via keystrokes.
+- Choose the shortest, most reliable shortcut path (e.g., Win, Alt, Enter, letters).
+- UI element interaction (Desktop, child_window, controls) is a LAST RESORT.
+
+BACKEND SELECTION:
+- Use `backend="win32"` for classic / desktop applications.
+- Use `backend="uia"` for modern, dynamic Windows applications (Start Menu, Settings, Camera, Microsoft Word).
+- Only select a backend when required — keystroke-only actions may not require one.
+
+================================================================================
+CODE GENERATION REQUIREMENTS
+================================================================================
+
+- Always generate COMPLETE, runnable Python code.
+- Include all necessary imports.
+- Wrap all risky operations in try-except blocks.
+- Print clear execution state indicators:
+  - On success: `EXECUTION_SUCCESS`
+  - On failure: `FAILED: <error message>`
+- Print success BEFORE any cleanup or teardown logic.
+- Do NOT terminate or close applications unless explicitly requested.
+- Avoid brittle assumptions:
+  - Do NOT rely on exact window titles.
+  - Prefer regex (`title_re`) or partial matches.
+  - Avoid hardcoded process names or control IDs unless unavoidable.
+
+================================================================================
+VALIDATION & ROBUSTNESS
+================================================================================
+
+- Validate only what is required to confirm the requested action occurred.
+- Do NOT over-validate unrelated windows or states.
+- Avoid long sleeps — prefer deterministic waits or minimal pauses.
+- Ensure the code is reusable and generic, not tied to a single app unless specified.
+
+================================================================================
+OUTPUT FORMAT (STRICT)
+================================================================================
+
+1. Provide ONLY the Python code inside a fenced block:
+```python
+# generated code
+"""
 
     
     def _parse_response(self, response: str, contexts: List[Dict]) -> Dict:
@@ -710,7 +757,7 @@ def demo_rag_system():
     # Initialize system
     config = RAGConfig(
         library_name="pywinauto",
-        llm_provider="groq",  # Change to "openai" or "ollama" as needed
+        llm_provider="ollama",  # Change to "openai" or "ollama" as needed
         top_k=5,
         temperature=0.2
     )
@@ -773,7 +820,7 @@ def interactive_chat():
     
     config = RAGConfig(
         library_name="pywinauto",
-        llm_provider="groq",  # Change as needed
+        llm_provider="ollama",  # Change as needed
         temperature=0.2
     )
     

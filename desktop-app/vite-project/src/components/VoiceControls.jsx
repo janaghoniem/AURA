@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { Mic, Settings, X, Send } from "lucide-react";
 
 const VoiceControls = ({
@@ -8,8 +8,17 @@ const VoiceControls = ({
   onCancel,
   chatMode,
   setChatMode,
+  onSendText,          // ⬅️ NEW PROP
 }) => {
+  const [text, setText] = useState("");
+
   if (chatMode) {
+    const handleSend = () => {
+      if (!text.trim()) return;
+      onSendText(text);     // ⬅️ DIRECTLY SEND TO AGENT
+      setText("");
+    };
+
     return (
       <div className="chat-input-container">
 
@@ -17,9 +26,14 @@ const VoiceControls = ({
           type="text"
           placeholder="Type your message..."
           className="chat-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSend();
+          }}
         />
 
-        <button className="send-btn">
+        <button className="send-btn" onClick={handleSend}>
           <Send size={18} />
         </button>
                 

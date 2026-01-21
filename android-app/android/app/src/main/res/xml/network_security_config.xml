@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext (HTTP) traffic to localhost and emulator host for development -->
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Emulator host (10.0.2.2 is how emulator reaches host machine) -->
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <!-- Localhost -->
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+    
+    <!-- All other domains use the default (HTTPS only) -->
+</network-security-config>
