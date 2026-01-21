@@ -75,12 +75,13 @@ class ExecutionResult(BaseModel):
 # Channel names for pub/sub
 class Channels:
     """Redis/Broker channel names"""
-    LANGUAGE_INPUT = "language.input"
+    LANGUAGE_INPUT = "language.input" 
     LANGUAGE_OUTPUT = "language.output"
-    
     LANGUAGE_TO_COORDINATOR = "language.to.coordinator"
+    
     COORDINATOR_TO_EXECUTION = "coordinator.to.execution"
     COORDINATOR_TO_LANGUAGE = "coordinator.to.language"
+    COORDINATOR_TO_REASONING = "coordinator.to.reasoning"
     
     EXECUTION_INPUT = "execution.input"
     EXECUTION_OUTPUT = "execution.output"
@@ -88,6 +89,7 @@ class Channels:
     
     REASONING_INPUT = "reasoning.input"
     REASONING_OUTPUT = "reasoning.output"
+    REASONING_TO_COORDINATOR = "reasoning.to.coordinator"
     
     BROADCAST = "broadcast"  # For status updates
     SESSION_CONTROL = "session_control"

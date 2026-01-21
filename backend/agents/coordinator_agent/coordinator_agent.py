@@ -175,7 +175,7 @@ async def decompose_task_to_actions(
 ) -> Dict[str, Any]:
     """Decompose user request into ActionTask queue using Groq LLM"""
     
-    prompt = f"""You are the YUSR Task Decomposition Agent. Convert user requests into low-level executable tasks.
+    prompt = f"""You are the AURA Task Decomposition Agent. Convert user requests into low-level executable tasks.
 
 # USER REQUEST
 {json.dumps(user_request, indent=2)}
@@ -298,6 +298,20 @@ Tasks:
 
 # OUTPUT FORMAT
 Return ONLY valid JSON array of tasks (no markdown, no explanations):
+
+{{
+  "needs_clarification": false,
+  "tasks": [
+    // Array of task objects
+  ]
+}}
+
+OR if missing critical info:
+
+{{
+  "needs_clarification": true,
+  "question": "Which Moodle course should I check?"
+}}
 
 Generate the task decomposition now:"""
 
