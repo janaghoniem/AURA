@@ -11,6 +11,16 @@ with open("RL/preprocessed data/verigui_coordinator_rl_train.json", "r", encodin
 
 dataset = DTDataset(data)
 
+
+# ===============================
+# LOAD VALIDATION DATA
+# ===============================
+with open("RL/preprocessed data/verigui_coordinator_rl_val.json", "r", encoding="utf-8") as f:
+    val_data = json.load(f)
+
+val_dataset = DTDataset(val_data)
+
+
 # ===============================
 # CUSTOM COLLATE FUNCTION
 # ===============================
@@ -46,6 +56,15 @@ loader = torch.utils.data.DataLoader(
     collate_fn=collate_fn
 )
 
+val_loader = torch.utils.data.DataLoader(
+    val_dataset,
+    batch_size=8,
+    shuffle=False,
+    collate_fn=collate_fn
+)
+
+
+
 # ===============================
 # MODEL SETUP
 # ===============================
@@ -59,6 +78,24 @@ model = DecisionTransformer(
 opt = torch.optim.Adam(model.parameters(), lr=3e-4)
 loss_fn = torch.nn.CrossEntropyLoss()
 
+
+@torch.no_grad()
+def validate(model, loader, loss_fn):
+    model.eval()
+    total_loss = 0.0
+    num_batches = 0
+
+    for states, actions, rtg, task_id in loader:
+        logits = model(states, actions, rtg, task_id)
+        loss = loss_fn(logits[:, -1], actions[:, -1])
+
+        total_loss += loss.item()
+        num_batches += 1
+
+    model.train()
+    return total_loss / max(1, num_batches)
+
+
 # ===============================
 # TRAINING LOOP
 # ===============================
@@ -71,4 +108,7 @@ for epoch in range(10):
         loss.backward()
         opt.step()
 
-    print(f"Epoch {epoch} | Loss {loss.item():.4f}")
+    val_loss = validate(model, val_loader, loss_fn)
+    print(f"Epoch {epoch} | Train Loss {loss.item():.4f} | Val Loss {val_loss:.4f}")
+
+torch.save(model.state_dict(), "dt_pretrained.pt")
