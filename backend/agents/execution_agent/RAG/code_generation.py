@@ -55,9 +55,9 @@ class RAGConfig:
     similarity_threshold: float = 0.3  # Minimum similarity score
     
     # LLM settings
-    llm_provider: str = "ollama"  # Options: "anthropic", "openai", "ollama", "huggingface"
-    llm_model: str = "qwen2.5-coder:7b"  # or "gpt-4", "gpt-3.5-turbo"
-    temperature: float = 0.2  # Lower = more deterministic
+    llm_provider: str = "groq"  # Options: "anthropic", "openai", "ollama", "huggingface"
+    llm_model: str = "moonshotai/kimi-k2-instruct-0905"  # or "gpt-4", "gpt-3.5-turbo"
+    temperature: float = 0.4  # Lower = more deterministic
     max_tokens: int = 1024
     
     # Code generation settings
@@ -374,60 +374,60 @@ class RAGSystem:
         print(f"Query: {user_query}")
         print(f"{'='*80}")
         
-        # Step 1: Retrieve relevant context ONCE (if not already done)
-        if not hasattr(self, '_cached_contexts') or self._cached_query != cache_key:
-            print("\n[1/3] Retrieving relevant context...")
-            self._cached_contexts = self.vectordb.get_relevant_context(cache_key)
-            self._cached_query = cache_key
-            print(f"Found {len(self._cached_contexts)} relevant documents")
-        else:
-            print(f"\n[1/3] Using cached contexts ({len(self._cached_contexts)} documents)")
+        # # Step 1: Retrieve relevant context ONCE (if not already done)
+        # if not hasattr(self, '_cached_contexts') or self._cached_query != cache_key:
+        #     print("\n[1/3] Retrieving relevant context...")
+        #     self._cached_contexts = self.vectordb.get_relevant_context(cache_key)
+        #     self._cached_query = cache_key
+        #     print(f"Found {len(self._cached_contexts)} relevant documents")
+        # else:
+        #     print(f"\n[1/3] Using cached contexts ({len(self._cached_contexts)} documents)")
         
-        # Step 2: Select subset of contexts based on retry attempt
-        # Step 2: Select subset of contexts based on retry attempt
-        if start_context_index >= len(self._cached_contexts):
-            # Instead of raising error, use the last available contexts
-            print(f"⚠️  Requested index {start_context_index} but only have {len(self._cached_contexts)} contexts")
-            print(f"⚠️  Using last available contexts instead")
+        # # Step 2: Select subset of contexts based on retry attempt
+        # # Step 2: Select subset of contexts based on retry attempt
+        # if start_context_index >= len(self._cached_contexts):
+        #     # Instead of raising error, use the last available contexts
+        #     print(f"⚠️  Requested index {start_context_index} but only have {len(self._cached_contexts)} contexts")
+        #     print(f"⚠️  Using last available contexts instead")
             
-            # Use the last batch of contexts
-            start_context_index = max(0, len(self._cached_contexts) - num_contexts)
+        #     # Use the last batch of contexts
+        #     start_context_index = max(0, len(self._cached_contexts) - num_contexts)
             
-            # If we've exhausted all contexts, return None to signal retry failure
-            if start_context_index == 0 and hasattr(self, '_last_context_index'):
-                if self._last_context_index == 0:
-                    print("❌ All context windows exhausted")
-                    return {
-                        'code': '',
-                        'explanation': 'No more contexts available for retry',
-                        'full_response': '',
-                        'contexts_used': 0,
-                        'top_similarity': 0,
-                        'references': []
-                    }
+        #     # If we've exhausted all contexts, return None to signal retry failure
+        #     if start_context_index == 0 and hasattr(self, '_last_context_index'):
+        #         if self._last_context_index == 0:
+        #             print("❌ All context windows exhausted")
+        #             return {
+        #                 'code': '',
+        #                 'explanation': 'No more contexts available for retry',
+        #                 'full_response': '',
+        #                 'contexts_used': 0,
+        #                 'top_similarity': 0,
+        #                 'references': []
+        #             }
 
-        self._last_context_index = start_context_index  # Track last used index
+        # self._last_context_index = start_context_index  # Track last used index
 
-        end_index = min(start_context_index + num_contexts, len(self._cached_contexts))
-        contexts = self._cached_contexts[start_context_index:end_index]
+        # end_index = min(start_context_index + num_contexts, len(self._cached_contexts))
+        # contexts = self._cached_contexts[start_context_index:end_index]
 
-        if not contexts:
-            print("❌ No contexts available in this window")
-            return {
-                'code': '',
-                'explanation': 'No contexts in requested window',
-                'full_response': '',
-                'contexts_used': 0,
-                'top_similarity': 0,
-                'references': []
-            }
+        # if not contexts:
+        #     print("❌ No contexts available in this window")
+        #     return {
+        #         'code': '',
+        #         'explanation': 'No contexts in requested window',
+        #         'full_response': '',
+        #         'contexts_used': 0,
+        #         'top_similarity': 0,
+        #         'references': []
+        #     }
 
         
-        print(f"Using contexts {start_context_index+1} to {min(end_index, len(self._cached_contexts))}")
+        # print(f"Using contexts {start_context_index+1} to {min(end_index, len(self._cached_contexts))}")
         
-        for i, ctx in enumerate(contexts[:3]):
-            print(f"  {start_context_index + i + 1}. Similarity: {ctx['similarity']:.2%} - {ctx['content'][:80]}...")
-        
+        # for i, ctx in enumerate(contexts[:3]):
+        #     print(f"  {start_context_index + i + 1}. Similarity: {ctx['similarity']:.2%} - {ctx['content'][:80]}...")
+        contexts=" "
         # Step 3: Build prompt with selected contexts
         print("\n[2/3] Building prompt...")
         prompt = self._build_prompt(user_query, contexts, conversation_context)
@@ -457,7 +457,7 @@ Do not assume the exact path of the executable or window title.
         self.conversation_history.append({
             'query': user_query,
             'response': result,
-            'context_indices': (start_context_index, end_index),
+            # 'context_indices': (start_context_index, end_index),
             'timestamp': datetime.now().isoformat()
         })
         
@@ -469,143 +469,218 @@ Do not assume the exact path of the executable or window title.
         
         prompt_parts = []
         
-        # Add conversation context if available
-        if conversation_context:
-            prompt_parts.append("## Previous Conversation:")
-            for msg in conversation_context[-3:]:  # Last 3 messages
-                prompt_parts.append(f"User: {msg.get('query', '')}")
-                if 'code' in msg.get('response', {}):
-                    prompt_parts.append(f"Assistant: {msg['response']['code'][:200]}...")
-            prompt_parts.append("")
+        # # Add conversation context if available
+        # if conversation_context:
+        #     prompt_parts.append("## Previous Conversation:")
+        #     for msg in conversation_context[-3:]:  # Last 3 messages
+        #         prompt_parts.append(f"User: {msg.get('query', '')}")
+        #         if 'code' in msg.get('response', {}):
+        #             prompt_parts.append(f"Assistant: {msg['response']['code'][:200]}...")
+        #     prompt_parts.append("")
         
-        # Add retrieved context
-        prompt_parts.append(f"## Relevant {self.config.library_name} Documentation and Examples:")
-        prompt_parts.append("")
+        # # Add retrieved context
+        # prompt_parts.append(f"## Relevant {self.config.library_name} Documentation and Examples:")
+        # prompt_parts.append("")
         
-        total_length = 0
-        for i, ctx in enumerate(contexts):
-            content = ctx['content']
+        # total_length = 0
+        # for i, ctx in enumerate(contexts):
+        #     content = ctx['content']
             
-            # Truncate if needed
-            if total_length + len(content) > self.config.max_context_length:
-                content = content[:self.config.max_context_length - total_length]
+        #     # Truncate if needed
+        #     if total_length + len(content) > self.config.max_context_length:
+        #         content = content[:self.config.max_context_length - total_length]
             
-            prompt_parts.append(f"### Reference {i+1} (Relevance: {ctx['similarity']:.0%}):")
-            prompt_parts.append(content)
-            prompt_parts.append("")
+        #     prompt_parts.append(f"### Reference {i+1} (Relevance: {ctx['similarity']:.0%}):")
+        #     prompt_parts.append(content)
+        #     prompt_parts.append("")
             
-            total_length += len(content)
+        #     total_length += len(content)
             
-            if total_length >= self.config.max_context_length:
-                break
+        #     if total_length >= self.config.max_context_length:
+        #         break
         
         # Add user query
-        prompt_parts.append("## User Request:")
-        prompt_parts.append(query)
-        prompt_parts.append("")
+        # prompt_parts.append("## User Request:")
+        # prompt_parts.append(query)
+        # prompt_parts.append("")
         
-        # Add instructions
-        prompt_parts.append("## Instructions:")
-        prompt_parts.append(f"Based on the above {self.config.library_name} documentation and examples, generate:")
-        prompt_parts.append("1. Complete, working Python code that addresses the user's request")
-        prompt_parts.append("2. Include necessary imports")
-        prompt_parts.append("3. Add helpful comments")
-        prompt_parts.append("4. Follow best practices and patterns shown in the examples")
-        prompt_parts.append("")
-        prompt_parts.append("IMPORTANT - Success/Failure Indicators:")  # ← ADD THIS
-        prompt_parts.append("- Your code MUST print success indicators when it completes successfully")
-        prompt_parts.append("- Use keywords: EXECUTION_SUCCESS, SUCCESS, COMPLETED, or DONE")
-        prompt_parts.append("- Example: print('SUCCESS: Window opened and visible')")
-        prompt_parts.append("- For errors, print 'FAILED:' or 'ERROR:' with details")
-        prompt_parts.append("- Always use try-except blocks for risky operations")
-        prompt_parts.append("")
-        prompt_parts.append("Format your response as:")
-        prompt_parts.append("```python")
-        prompt_parts.append("# Your code here")
-        prompt_parts.append("```")
-        prompt_parts.append("")
-        prompt_parts.append("Then provide a brief explanation of how the code works.")
+        # # Add instructions
+        # prompt_parts.append("## Instructions:")
+        # prompt_parts.append(f"Based on the above {self.config.library_name} documentation and examples, generate:")
+        # prompt_parts.append("1. Complete, working Python code that addresses the user's request")
+        # prompt_parts.append("2. Include necessary imports")
+        # prompt_parts.append("3. Add helpful comments")
+        # prompt_parts.append("4. Follow best practices and patterns shown in the examples")
+        # prompt_parts.append("")
+        # prompt_parts.append("IMPORTANT - Success/Failure Indicators:")  # ← ADD THIS
+        # prompt_parts.append("- Your code MUST print success indicators when it completes successfully")
+        # prompt_parts.append("- Use keywords: EXECUTION_SUCCESS, SUCCESS, COMPLETED, or DONE")
+        # prompt_parts.append("- Example: print('SUCCESS: Window opened and visible')")
+        # prompt_parts.append("- For errors, print 'FAILED:' or 'ERROR:' with details")
+        # prompt_parts.append("- Always use try-except blocks for risky operations")
+        # prompt_parts.append("")
+        # prompt_parts.append("Format your response as:")
+        # prompt_parts.append("```python")
+        # prompt_parts.append("# Your code here")
+        # prompt_parts.append("```")
+        prompt_parts.append("""Generate automation code to perform the following task:
+
+Task Description:""")
+        prompt_parts.append(query)
+        prompt_parts.append("""
+
+
+Requirements
+
+Execute the task exactly as described, without adding extra steps.
+
+Prefer the simplest and most reliable execution method.
+
+If the primary method fails, automatically adapt and try alternative approaches.
+
+Do not assume success—ensure the task is actually performed.
+
+The code must be suitable for use within a multi-agent automation system.
+
+Return only the generated code and necessary explanations, with no assumptions beyond the task description.
+""")
         
         return "\n".join(prompt_parts)
     
     def _get_system_prompt(self) -> str:
         """Get system prompt for the LLM"""
-        return f"""You are an expert Python  Python automation engineer specializing in Windows GUI automation using {self.config.library_name}.
-Your role is to generate SAFE, RELIABLE, and DETERMINISTIC Python code that performs exactly the user-requested action — no more, no less.
+        return f"""You are an expert Python automation engineer operating inside a multi-agent
+RAG + Execution + Validation system.
+
+Your output will be executed automatically in a sandboxed Windows environment.
+It may be retried, validated, cached, compared, or re-executed.
+
+Your primary responsibility is to generate automation code that is:
+- Correct
+- Minimal
+- Deterministic
+- Robust in real-world Windows environments
+
+Reliability is more important than cleverness.
 
 ================================================================================
-CORE EXECUTION PRINCIPLES (MANDATORY)
+EXECUTION CONTEXT AWARENESS (MANDATORY)
 ================================================================================
 
-1. STRICT INTENT ISOLATION
-- Execute ONLY what the user explicitly requests.
-- DO NOT assume any previous, parallel, or future tasks.
-- DO NOT add setup, cleanup, or helper actions unless explicitly requested.
-- If the user did not ask to open, close, start, switch, or focus an application — DO NOT do it.
-
-2. STATELESS EXECUTION
-- Treat every query as fully independent.
-- Never rely on assumed application state.
-- Never infer context from earlier interactions.
-- Never chain actions unless the user explicitly describes multiple steps.
-
-3. NO IMPLICIT APPLICATION ASSUMPTIONS
-- Do NOT assume which application is open.
-- Do NOT assume a document, window, or dialog exists.
-- If application context is missing, use the most minimal, non-destructive action possible.
-
-4. NO SIDE EFFECTS
-- Do NOT open new applications, windows, or documents unless explicitly requested.
-- Do NOT close, terminate, reset, or modify application state unless explicitly requested.
+- This code is part of an automated execution agent, NOT a script runner.
+- Your output may be:
+  - Executed multiple times
+  - Compared against cached actions
+  - Automatically validated based on observable behavior
+- Assume NO prior execution state.
+- Assume NO application or system state unless explicitly provided.
+- Treat every request as fully independent and stateless.
 
 ================================================================================
-ACTION EXECUTION STRATEGY
+CORE GENERATION PRINCIPLES
 ================================================================================
 
-KEYBOARD-FIRST RULE (DEFAULT):
-- Prefer keyboard shortcuts and keystrokes over UI automation.
-- Use `pywinauto.keyboard.send_keys()` whenever the task can be completed via keystrokes.
-- Choose the shortest, most reliable shortcut path (e.g., Win, Alt, Enter, letters).
-- UI element interaction (Desktop, child_window, controls) is a LAST RESORT.
+1. STRICT INTENT ADHERENCE
+- Perform ONLY the action explicitly requested by the user.
+- Do NOT infer setup, cleanup, follow-up, or helper actions.
+- Do NOT assume missing context.
+- Do NOT chain steps unless the user explicitly asks for multiple actions.
 
-BACKEND SELECTION:
-- Use `backend="win32"` for classic / desktop applications.
-- Use `backend="uia"` for modern, dynamic Windows applications (Start Menu, Settings, Camera, Microsoft Word).
-- Only select a backend when required — keystroke-only actions may not require one.
+2. STATELESS & INDEPENDENT EXECUTION
+- Never assume:
+  - An application is already open
+  - A window is focused
+  - A previous task succeeded or failed
+- Never rely on history, memory, or prior executions.
+
+3. SIMPLE-FIRST EXECUTION STRATEGY
+- Always prefer the most:
+  - General
+  - Stable
+  - Widely supported
+  - Non-fragile
+  approach.
+- Avoid:
+  - Hardcoded file paths
+  - Application binaries
+  - Rare or app-specific shortcuts
+  - Deep or brittle UI trees unless required
+
+4. ADAPTIVE EXECUTION MINDSET
+- Assume no single perfect method always exists.
+- Prefer:
+  1. Keyboard-driven interaction
+  2. UI automation only if keyboard interaction is insufficient
+- Choose approaches that resemble how a real user would perform the task.
 
 ================================================================================
-CODE GENERATION REQUIREMENTS
+FORBIDDEN EXECUTION METHODS (HARD RULES)
+================================================================================
+
+- Do NOT use:
+  - subprocess
+  - os.system
+  - os.startfile
+  - shell commands
+  - PowerShell or cmd
+  - Process spawning or execution
+
+This agent is an AUTOMATION agent, not a process launcher.
+
+If an action requires opening or starting something:
+- Simulate user interaction via input and UI automation
+- Do NOT invoke system-level execution APIs
+
+Any code using forbidden methods will fail validation.
+
+================================================================================
+AUTOMATION TOOLING GUIDANCE
+================================================================================
+
+- Keyboard interaction is preferred whenever reliable.
+- GUI automation is acceptable when keyboard-only interaction is insufficient.
+- Backend selection:
+  - win32 → classic / legacy desktop applications
+  - uia   → modern / dynamic Windows applications
+- Prefer top_window() over named window access.
+- Avoid brittle assumptions:
+  - Do NOT rely on exact window titles
+  - Prefer regex or partial matches when needed
+  - Avoid hardcoded control IDs or process names
+
+================================================================================
+SHORTCUT USAGE RULES
+================================================================================
+
+- Do NOT invent or guess shortcuts.
+- Only use:
+  - Universally standard shortcuts (e.g., Ctrl+C, Ctrl+V, Ctrl+S, Ctrl+N)
+  - Shortcuts explicitly provided by the user
+- If unsure, choose a more general interaction method.
+
+================================================================================
+EXECUTION & VALIDATION RULES
 ================================================================================
 
 - Always generate COMPLETE, runnable Python code.
-- Include all necessary imports.
-- Wrap all risky operations in try-except blocks.
-- Print clear execution state indicators:
-  - On success: `EXECUTION_SUCCESS`
-  - On failure: `FAILED: <error message>`
-- Print success BEFORE any cleanup or teardown logic.
-- Do NOT terminate or close applications unless explicitly requested.
-- Avoid brittle assumptions:
-  - Do NOT rely on exact window titles.
-  - Prefer regex (`title_re`) or partial matches.
-  - Avoid hardcoded process names or control IDs unless unavoidable.
-
-================================================================================
-VALIDATION & ROBUSTNESS
-================================================================================
-
-- Validate only what is required to confirm the requested action occurred.
-- Do NOT over-validate unrelated windows or states.
-- Avoid long sleeps — prefer deterministic waits or minimal pauses.
-- Ensure the code is reusable and generic, not tied to a single app unless specified.
+- Include all required imports.
+- Wrap risky operations in try-except blocks.
+- Print execution state exactly once:
+  - EXECUTION_SUCCESS → only when the PRIMARY task completes
+  - FAILED: <error>   → when the PRIMARY task fails
+- Do NOT report failure due to cleanup or secondary steps.
+- Print success BEFORE any optional teardown logic.
+- Do NOT close or terminate applications unless explicitly requested.
 
 ================================================================================
 OUTPUT FORMAT (STRICT)
 ================================================================================
 
-1. Provide ONLY the Python code inside a fenced block:
-```python
-# generated code
+- Output ONLY a single Python code block.
+- No explanations.
+- No markdown.
+- No extra text.
+
 """
 
     
@@ -633,16 +708,16 @@ OUTPUT FORMAT (STRICT)
         return {
             'code': code,
             'explanation': explanation,
-            'full_response': response,
-            'contexts_used': len(contexts),
-            'top_similarity': contexts[0]['similarity'] if contexts else 0,
-            'references': [
-                {
-                    'source': ctx['metadata'].get('source', 'unknown'),
-                    'similarity': ctx['similarity']
-                }
-                for ctx in contexts[:3]
-            ]
+            'full_response': response
+            # 'contexts_used': len(contexts),
+            # 'top_similarity': contexts[0]['similarity'] if contexts else 0,
+            # 'references': [
+            #     {
+            #         'source': ctx['metadata'].get('source', 'unknown'),
+            #         'similarity': ctx['similarity']
+            #     }
+            #     for ctx in contexts[:3]
+            # ]
         }
     
     def chat(self, message: str) -> Dict:
@@ -757,7 +832,7 @@ def demo_rag_system():
     # Initialize system
     config = RAGConfig(
         library_name="pywinauto",
-        llm_provider="ollama",  # Change to "openai" or "ollama" as needed
+        llm_provider="groq",  # Change to "openai" or "ollama" as needed
         top_k=5,
         temperature=0.2
     )
@@ -820,7 +895,7 @@ def interactive_chat():
     
     config = RAGConfig(
         library_name="pywinauto",
-        llm_provider="ollama",  # Change as needed
+        llm_provider="groq",  # Change as needed
         temperature=0.2
     )
     
