@@ -99,14 +99,17 @@ body {
   );
   position: relative;
 } */
+.main-overlay {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 60px 80px; /* Adjust padding for left alignment */
+}
 
 /* Center Text */
 .center-content {
-  position: absolute;
-  top: 40%;
-  left: 50%;
-  transform: translate(-50%, -50%);
   text-align: left;
+  margin-bottom: 2rem;
 }
 
 .greeting {
@@ -118,6 +121,75 @@ body {
 .headline {
   font-size: 40px;
   font-weight: 500;
+}
+
+/* index.css - Update these classes */
+
+.chat-display-area {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px; /* Increased gap for better separation */
+  padding: 0 10px;
+}
+
+/* Base style for message items */
+.message-item {
+  display: flex;
+  gap: 16px;
+  max-width: 85%;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* User Message: Aligned Right, subtle background */
+.message-item.user {
+  align-self: flex-end;
+  flex-direction: row-reverse; /* Avatar on the right */
+  text-align: right;
+}
+
+.message-item.user .message-bubble {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 12px 18px;
+  border-radius: 18px 18px 2px 18px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 16px;
+}
+
+/* Assistant Message: Aligned Left, No background (Gemini style) */
+.message-item.assistant {
+  align-self: flex-start;
+  text-align: left;
+}
+
+.message-item.assistant .message-bubble {
+  padding: 12px 0; /* No bubble background, just clean text */
+  color: #ffffff;
+  font-size: 18px;
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+/* Small Avatar Icons */
+.message-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: bold;
+  background: linear-gradient(135deg, #7a1fa2, #ff4d6d);
 }
 
 /* Voice Controls */
@@ -224,3 +296,10 @@ body {
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.6);
 }
 
+.voice-controls, .chat-input-container {
+  position: relative !important;
+  bottom: unset !important;
+  left: unset !important;
+  transform: unset !important;
+  margin: 0 auto; /* Keep input centered horizontally at bottom */
+}

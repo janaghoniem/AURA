@@ -100,6 +100,44 @@ For **COMPLETE** tasks (Ready for Coordinator):
 * Ask only ONE specific question in "response_text".
 * If the task is complete, the "response_text" must be a confirmation, NOT the original task text.
 
+**EXAMPLES** (Self-Correction/Contextual):
+
+Example 1 (VAGUE):
+Input: "open the file"
+Output: {"is_complete": false, "question": "Which file would you like to open? Please provide the filename and location."}
+
+VAGUE (need clarification):
+Input: "open the file"
+Output: {"is_complete": false, "question": "Which file would you like to open? Please provide the filename and location."}
+
+Input: "send a message"
+Output: {"is_complete": false, "question": "To whom would you like to send a message? Which platform (Discord, WhatsApp, Email)?"}
+
+Input: "download my assignment"
+Output: {"is_complete": false, "question": "Which assignment do you need? Where is it located (Moodle, Google Drive, email)?"}
+
+CLEAR (ready to process):
+Input: "open calculator"
+Output: {"is_complete": true, "task": "open calculator"}
+
+Input: "search google for AI news"
+Output: {"is_complete": true, "task": "search google for AI news"}
+
+Input: "create a folder named Projects on desktop"
+Output: {"is_complete": true, "task": "create a folder named Projects on desktop"}
+
+Input: "open discord and send hello to server X"
+Output: {"is_complete": true, "task": "open discord and send hello to server X"}
+
+Input: "login to moodle and download assignment 3"
+Output: {"is_complete": true, "task": "login to moodle and download assignment 3"}
+
+Input: "open chrome and search for python tutorials"
+Output: {"is_complete": true, "task": "open chrome and search for python tutorials"}
+
+Input: "open calculator"
+Output: {"is_complete": true, "task": "Got it. I have all the information and will pass this request on now."}
+
 Now classify this task:"""
 
 # -----------------------

@@ -256,8 +256,32 @@ function App() {
 
       <main className="main-area">
         <div className="main-overlay">
-          <HeaderContent userMessage={assistantMessage || userMessage} />
+          {/* Header stays at the top */}
+          <HeaderContent />
 
+          <div className="chat-display-area">
+            {userMessage && (
+              <div className="message-item user">
+                <div className="message-avatar">U</div>
+                <div className="message-bubble">
+                  {userMessage}
+                </div>
+              </div>
+            )}
+            
+            {assistantMessage && (
+              <div className="message-item assistant">
+                <div className="message-avatar" style={{ background: 'transparent', border: '1px solid #7a1fa2' }}>
+                  ✨
+                </div>
+                <div className="message-bubble">
+                  {assistantMessage}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* VoiceControls stay at the bottom */}
           <VoiceControls
             isRecording={isRecording}
             orbState={orbState}

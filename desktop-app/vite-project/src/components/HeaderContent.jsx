@@ -56,7 +56,6 @@ const getTimeGreeting = (user) => {
 ========================= */
 const HeaderContent = ({
   username = "Labubu",
-  userMessage,
   mode = "default", // focus | friendly | minimal | default
 }) => {
   const [greeting] = useState(getTimeGreeting(username)); // single greeting per load
@@ -69,7 +68,7 @@ const HeaderContent = ({
   return (
     <div className="center-content">
       <p className="greeting">{greeting}</p>
-      <h1 className="headline">{userMessage || headline}</h1>
+      <h1 className="headline">{headline}</h1>
     </div>
   );
 };
