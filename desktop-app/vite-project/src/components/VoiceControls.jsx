@@ -8,48 +8,51 @@ const VoiceControls = ({
   onCancel,
   chatMode,
   setChatMode,
-  onSendText,          // ⬅️ NEW PROP
+  onSendText,
+  onSettingsClick,
 }) => {
   const [text, setText] = useState("");
 
   if (chatMode) {
     const handleSend = () => {
       if (!text.trim()) return;
-      onSendText(text);     // ⬅️ DIRECTLY SEND TO AGENT
+      onSendText(text);
       setText("");
     };
 
     return (
-      <div className="chat-input-container">
+      <div className="chat-input-wrapper">
+        <div className="chat-input-container">
+          <input
+            type="text"
+            placeholder="Type your message..."
+            className="chat-input"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSend();
+            }}
+            autoFocus
+          />
 
-        <input
-          type="text"
-          placeholder="Type your message..."
-          className="chat-input"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleSend();
-          }}
-        />
-
-        <button className="send-btn" onClick={handleSend}>
-          <Send size={18} />
-        </button>
-                
-        <button
-          className="voice-return-btn"
-          onClick={() => setChatMode(false)}
-          style={{ cursor: "pointer" }}
-        >
-          <Mic size={18} />
-        </button>
+          <button className="send-btn" onClick={handleSend}>
+            <Send size={18} />
+          </button>
+                  
+          <button
+            className="voice-return-btn"
+            onClick={() => setChatMode(false)}
+            style={{ cursor: "pointer" }}
+          >
+            <Mic size={18} />
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="voice-controls">
+    <div className={`voice-controls ${isRecording ? "recording" : ""}`}>
       <button className="control-btn" onClick={onCancel}>
         <X size={20} />
       </button>
@@ -62,7 +65,10 @@ const VoiceControls = ({
         <Mic size={22} />
       </button>
 
-      <button className="control-btn">
+      <button 
+        className="control-btn"
+        onClick={onSettingsClick}
+      >
         <Settings size={20} />
       </button>
     </div>

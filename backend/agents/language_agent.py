@@ -531,10 +531,13 @@ async def start_language_agent(broker):
         return active_agents[agent_key]
     
     async def handle_user_input(message: dict):
+        """Handle user input from HTTP API"""
         payload_data = message.payload if hasattr(message, 'payload') else message.get('payload', {})
         input_text = payload_data.get("input", "")
+        device_type = payload_data.get("device_type", "desktop")  # NEW: Get device_type
         
         print(f"📝 User said: {input_text}")
+        print(f"📱 Device type: {device_type}")  # NEW: Log device type
 
         user_id = payload_data.get("user_id", "default_user")
         session_id = message.session_id if hasattr(message, 'session_id') else "default_session"
@@ -605,23 +608,13 @@ async def start_language_agent(broker):
         print(f"🤖 Agent: {response}\n")
         
         if is_complete:
-            # Extract full task context from conversation
-            conversation_text = "\n".join([
-                f"{m['role']}: {m['content']}" 
-                for m in agent.memory if m['role'] in ['user', 'assistant']
-            ])
-            
+            # Forward confirmation directly to coordinator - include device_type
             task_msg = AgentMessage(
                 message_type=MessageType.TASK_REQUEST,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.COORDINATOR,
                 response_to=http_request_id,
-                payload={
-                    "action": input_text,
-                    "context": "local",
-                    "user_id": user_id,
-                    "conversation_history": conversation_text
-                }
+                payload={"confirmation": response, "device_type": device_type}  # NEW: Add device_type
             )
             await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, task_msg)
 
@@ -634,7 +627,8 @@ async def start_language_agent(broker):
                 response_to=http_request_id,
                 payload={
                     "question": response,
-                    "context": str(message)
+                    "context": str(message),
+                    "device_type": device_type  # NEW: Add device_type
                 }
             )
             await broker.publish(Channels.LANGUAGE_OUTPUT, clarification_msg)

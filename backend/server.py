@@ -320,32 +320,32 @@ async def process_user_input(request: Request):
         session_id = data.get("session_id", "default")
         user_input = data.get("input", "").strip()
         is_clarification = data.get("is_clarification", False)
+        device_type = data.get("device_type", "desktop")  # NEW: Get device type
         
         if not user_input:
             raise HTTPException(status_code=400, detail="Missing 'input' field")
         
         logger.info(f"📥 HTTP request from session {session_id}: {user_input}")
+        logger.info(f"📱 Device type: {device_type}")  # NEW: Log device type
         
         # Create message
         if is_clarification:
-            # Clarification response - use "answer" key
             message = AgentMessage(
                 message_type=MessageType.CLARIFICATION_RESPONSE,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"answer": user_input, "input": user_input}  # Include both for compatibility
+                payload={"answer": user_input, "input": user_input, "device_type": device_type}  # NEW: Add device_type
             )
             logger.info(f"💬 Created clarification response message")
             logger.info(f"💬 Payload: {message.payload}")
         else:
-            # New task request - use "input" key
             message = AgentMessage(
                 message_type=MessageType.TASK_REQUEST,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"input": user_input}
+                payload={"input": user_input, "device_type": device_type}  # NEW: Add device_type
             )
             logger.info(f"📋 Created task request message")
             logger.info(f"📋 Payload: {message.payload}")
