@@ -170,7 +170,7 @@ class CoordinatorState(BaseModel):
 async def decompose_task_to_actions(
     user_request: Dict[str, Any],
     preferences_context: str,
-    device_type: str = "mobile"  # NEW: Add device_type parameter
+    device_type: str = "desktop"  # NEW: Add device_type parameter
 ) -> Dict[str, Any]:
     """Decompose user request into ActionTask queue using Groq LLM"""
     
@@ -273,15 +273,15 @@ User: "Open Notepad"
 
 Return:
 [
-  {
+  {{
     "task_id": "task_1",
     "ai_prompt": "Open Notepad",
     "device": "desktop",
     "context": "local",
     "target_agent": "action",
-    "extra_params": {"app_name": "notepad.exe"},
+    "extra_params": {{"app_name": "notepad"}},
     "depends_on": null
-  }
+  }}
 ]
 
 User: "Download latest Moodle assignment and summarize it to Notepad"
@@ -478,8 +478,9 @@ def create_coordinator_graph():
         
         # NEW: Set device in all tasks if not already set
         for task in tasks:
-            if not task.get("device"):
-                task["device"] = device_type
+          if task.device is None:
+             task.device = device_type
+
         
         return {
             "input": state["input"],
@@ -522,9 +523,11 @@ def create_coordinator_graph():
             if current_task.depends_on:
                 dep_ids = current_task.depends_on.split(",")
                 dependencies_met = all(
-                    results.get(dep_id.strip(), {}).get("status") == "success"
-                    for dep_id in dep_ids
+                   results.get(dep_id.strip()) 
+                   and results.get(dep_id.strip()).status == "success"
+                   for dep_id in dep_ids
                 )
+
                 
                 if not dependencies_met:
                     logger.warning(f"⏭️ Skipping {current_task.task_id} - dependencies not met")
