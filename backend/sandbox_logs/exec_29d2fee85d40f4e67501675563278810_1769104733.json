@@ -1,0 +1,18 @@
+{
+  "code": "import pyautogui\nimport time\n\ntry:\n    # Press Win key to open Start menu\n    pyautogui.press('win')\n    time.sleep(0.5)\n    # Type 'notepad' to search\n    pyautogui.write('notepad', interval=0.05)\n    time.sleep(0.5)\n    # Press Enter to launch Notepad\n    pyautogui.press('enter')\n    time.sleep(1)\n    # Verify Notepad window exists\n    if pyautogui.getWindowsWithTitle('Notepad'):\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        print(\"FAILED: Notepad window not found\")\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "success",
+    "exit_code": 0,
+    "stdout": "EXECUTION_SUCCESS\n",
+    "stderr": "",
+    "execution_time": 2.973825216293335,
+    "timestamp": "2026-01-22T19:58:53.490322",
+    "validation_passed": true,
+    "validation_errors": [],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "29d2fee85d40f4e67501675563278810",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T19:58:53.491321"
+}

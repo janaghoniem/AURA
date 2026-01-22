@@ -1,0 +1,21 @@
+{
+  "code": "import pyautogui\nimport time\nimport uiautomation as auto\n\ntry:\n    # Press Windows key to open Start menu\n    pyautogui.press('win')\n    time.sleep(0.5)\n    # Type \"calculator\" to search for the app\n    pyautogui.write('calculator', interval=0.05)\n    time.sleep(0.5)\n    # Press Enter to launch the first result\n    pyautogui.press('enter')\n    time.sleep(1)\n    # Verify Calculator window exists\n    calc = auto.WindowControl(searchDepth=1, ClassName='ApplicationFrameWindow')\n    if calc.Exists(maxSearchSeconds=3, searchInterval=0.2):\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        print(\"FAILED: Calculator window not detected\")\nexcept Exception as e:\n    print(\"FAILED: \" + str(e))",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpyhlra4vq.py\", line 3, in <module>\n    import uiautomation as auto\nModuleNotFoundError: No module named 'uiautomation'\n",
+    "execution_time": 0.30589795112609863,
+    "timestamp": "2026-01-22T20:02:44.446423",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "c28637bdb2c89c5c5df1f46c8be0af87",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:02:44.448421"
+}

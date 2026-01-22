@@ -1,0 +1,21 @@
+{
+  "code": "import pywinauto\nimport pyautogui\nimport time\n\ntry:\n    # Start Notepad via the Windows Run dialog\n    pyautogui.hotkey('win', 'r')\n    time.sleep(0.5)\n    pyautogui.typewrite('notepad')\n    time.sleep(0.2)\n    pyautogui.press('enter')\n    time.sleep(1)\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(\"FAILED:\", str(e))",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpnme_3t0u.py\", line 1, in <module>\n    import pywinauto\nModuleNotFoundError: No module named 'pywinauto'\n",
+    "execution_time": 0.07657504081726074,
+    "timestamp": "2026-01-22T18:56:28.878719",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "301d02645803c952d9245b6865ce64ca",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T18:56:28.879719"
+}

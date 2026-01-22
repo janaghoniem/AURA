@@ -1,0 +1,21 @@
+{
+  "code": "import pywinauto\nimport time\n\ntry:\n    app = pywinauto.Application(backend=\"uia\").start(\"winword.exe\")\n    time.sleep(3)\n    if app.windows():\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        print(\"FAILED: Word window not detected\")\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpn7cehm5_.py\", line 1, in <module>\n    import pywinauto\nModuleNotFoundError: No module named 'pywinauto'\n",
+    "execution_time": 0.09367680549621582,
+    "timestamp": "2026-01-22T18:53:50.024818",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "8762b79d85aadc31d07373ef111e9d7d",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T18:53:50.025776"
+}

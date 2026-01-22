@@ -1,0 +1,21 @@
+{
+  "code": "import pyautomation\n\n# Bring up the Start menu\npyautomation.send_keys('{LWIN}')\npyautomation.sleep(0.5)\n\n# Type \"notepad\" to search for the application\npyautomation.send_keys('notepad')\npyautomation.sleep(0.5)\n\n# Press Enter to launch Notepad\npyautomation.send_keys('{ENTER}')\npyautomation.sleep(1)\n\n# Verify Notepad window appears\ntry:\n    # Use top_window() to get the foreground window (Notepad should be active)\n    notepad = pyautomation.Desktop(backend=\"win32\").top_window()\n    if notepad and \"notepad\" in notepad.window_text().lower():\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        print(\"FAILED: Notepad window not detected\")\nexcept Exception as e:\n    print(\"FAILED:\", str(e))",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpwn49z189.py\", line 1, in <module>\n    import pyautomation\nModuleNotFoundError: No module named 'pyautomation'\n",
+    "execution_time": 0.07504558563232422,
+    "timestamp": "2026-01-22T18:56:27.646239",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "99072ddda60a89131c50024183925065",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T18:56:27.647243"
+}

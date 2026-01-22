@@ -1,0 +1,18 @@
+{
+  "code": "import pyautogui\nimport time\n\ntry:\n    # Press Windows key to open Start menu\n    pyautogui.press('win')\n    time.sleep(1)\n\n    # Type \"word\" to search for Microsoft Word\n    pyautogui.typewrite('word', interval=0.1)\n    time.sleep(1)\n\n    # Press Enter to launch the first result\n    pyautogui.press('enter')\n    time.sleep(3)\n\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "success",
+    "exit_code": 0,
+    "stdout": "EXECUTION_SUCCESS\n",
+    "stderr": "",
+    "execution_time": 6.027063369750977,
+    "timestamp": "2026-01-22T20:00:38.519817",
+    "validation_passed": true,
+    "validation_errors": [],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "a282705bab32f765c720fc6aeeea25dc",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:00:38.520832"
+}

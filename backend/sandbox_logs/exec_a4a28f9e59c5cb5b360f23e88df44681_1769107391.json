@@ -1,0 +1,18 @@
+{
+  "code": "import pyautogui\nimport time\n\ntry:\n    pyautogui.hotkey('win', 'r')\n    time.sleep(0.5)\n    pyautogui.typewrite('notepad')\n    time.sleep(0.5)\n    pyautogui.press('enter')\n    time.sleep(1)\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "success",
+    "exit_code": 0,
+    "stdout": "EXECUTION_SUCCESS\n",
+    "stderr": "",
+    "execution_time": 2.6793711185455322,
+    "timestamp": "2026-01-22T20:43:11.266608",
+    "validation_passed": true,
+    "validation_errors": [],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "a4a28f9e59c5cb5b360f23e88df44681",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:43:11.267614"
+}
