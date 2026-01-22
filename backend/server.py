@@ -21,7 +21,8 @@ from groq import Groq
 from agents.utils.broker import broker
 from agents.language_agent import start_language_agent
 from agents.coordinator_agent.coordinator_agent import start_coordinator_agent
-from agents.execution_agent.Coordinator import start_execution_agent
+# from agents.execution_agent.Coordinator import start_execution_agent
+from agents.execution_agent.RAG.code_execution import initialize_execution_agent_for_server
 from agents.utils.protocol import (
     AgentMessage, MessageType, AgentType, Channels,
     ClarificationMessage
@@ -55,7 +56,7 @@ else:
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown"""
     # Startup
-    logger.info("🚀 Starting YUSR Backend...")
+    logger.info("🚀 Starting AURA Backend...")
     
     # Start broker
     await broker.start()
@@ -67,14 +68,14 @@ async def lifespan(app: FastAPI):
     # Start all agents concurrently
     asyncio.create_task(start_language_agent(broker))
     asyncio.create_task(start_coordinator_agent(broker))
-    asyncio.create_task(start_execution_agent(broker))
+    asyncio.create_task(initialize_execution_agent_for_server(broker))
     
     logger.info("✅ All agents started successfully")
     
     yield
     
     # Shutdown
-    logger.info("🛑 Shutting down YUSR Backend...")
+    logger.info("🛑 Shutting down AURA Backend...")
     await broker.stop()
 
 

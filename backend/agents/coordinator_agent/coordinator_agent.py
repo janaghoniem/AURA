@@ -849,7 +849,7 @@ async def start_coordinator_agent(broker_instance):
     broker_instance.subscribe(Channels.LANGUAGE_TO_COORDINATOR, handle_task_from_language)
     broker_instance.subscribe(Channels.EXECUTION_TO_COORDINATOR, handle_action_result)
     broker_instance.subscribe(Channels.REASONING_TO_COORDINATOR, handle_action_result)
-    broker_instance.subscribe(Channels.INTERRUPT_CONTROL, handle_interrupt_command)
+    # broker_instance.subscribe(Channels.INTERRUPT_CONTROL, handle_interrupt_command)
     broker_instance.subscribe(Channels.SESSION_CONTROL, handle_session_control)
     
     logger.info("✅ Coordinator Agent started with RAG action layer support")
