@@ -1,7 +1,3 @@
-"""
-YUSR Main Server - Pub/Sub Architecture with Groq TTS/STT
-Starts all agents and provides HTTP API for Electron app
-"""
 import asyncio
 import logging
 import os
@@ -21,11 +17,14 @@ from groq import Groq
 from agents.utils.broker import broker
 from agents.language_agent import start_language_agent
 from agents.coordinator_agent.coordinator_agent import start_coordinator_agent
-from agents.execution_agent.Coordinator import start_execution_agent
+from agents.reasoning_agent import start_reasoning_agent
+# from agents.execution_agent.Coordinator import start_execution_agent
+from agents.execution_agent.RAG.code_execution import initialize_execution_agent_for_server
 from agents.utils.protocol import (
     AgentMessage, MessageType, AgentType, Channels,
     ClarificationMessage
 )
+from ThinkingStepManager import ThinkingStepManager
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -55,27 +54,46 @@ else:
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown"""
     # Startup
-    logger.info("🚀 Starting YUSR Backend...")
+    logger.info("🚀 Starting AURA Backend...")
     
     # Start broker
     await broker.start()
+    logger.info("✅ Broker started")
     
     # Subscribe to output channels BEFORE starting agents
     broker.subscribe(Channels.LANGUAGE_OUTPUT, handle_language_output)
     broker.subscribe(Channels.COORDINATOR_TO_LANGUAGE, handle_coordinator_output)
+    logger.info("✅ Subscribed to output channels")
     
-    # Start all agents concurrently
-    asyncio.create_task(start_language_agent(broker))
-    asyncio.create_task(start_coordinator_agent(broker))
-    asyncio.create_task(start_execution_agent(broker))
+    # Start all agents as background tasks (don't wait for them)
+    try:
+        logger.info("🚀 Starting Language Agent...")
+        asyncio.create_task(start_language_agent(broker))
+        await asyncio.sleep(0.1)  # Allow task to register
+        
+        logger.info("🚀 Starting Coordinator Agent...")
+        asyncio.create_task(start_coordinator_agent(broker))
+        await asyncio.sleep(0.1)
+        
+        logger.info("🚀 Starting Reasoning Agent...")
+        asyncio.create_task(start_reasoning_agent())
+        await asyncio.sleep(0.1)
+        
+        logger.info("🚀 Starting Execution Agent...")
+        asyncio.create_task(initialize_execution_agent_for_server(broker))
+        await asyncio.sleep(0.1)
+        
+        logger.info("✅ All agents scheduled successfully")
+    except Exception as e:
+        logger.error(f"❌ Error starting agents: {e}", exc_info=True)
     
-    logger.info("✅ All agents started successfully")
-    
+    # Yield control back to FastAPI so server can start
     yield
     
     # Shutdown
-    logger.info("🛑 Shutting down YUSR Backend...")
+    logger.info("🛑 Shutting down AURA Backend...")
     await broker.stop()
+    logger.info("✅ Broker stopped")
 
 
 app = FastAPI(
@@ -129,13 +147,7 @@ def detect_language(text: str) -> str:
 async def text_to_speech(request: Request):
     """
     Convert text to speech using Groq TTS with intelligent language detection
-    
-    Automatically selects the appropriate voice based on text content:
-    - Primarily Arabic text → orpheus-arabic-saudi
-    - Primarily English text → orpheus-english
-    - Mixed text → Uses the voice specified or defaults based on majority language
-    
-    Returns base64-encoded WAV audio
+    FIX: Updated model name and voice mapping
     """
     try:
         logger.info("🔊 Received TTS request")
@@ -146,8 +158,8 @@ async def text_to_speech(request: Request):
         
         data = await request.json()
         text = data.get("text", "").strip()
-        voice_name = data.get("voice_name")  # Optional - auto-detect if not provided
-        force_voice = data.get("force_voice", False)  # Override auto-detection
+        voice_name = data.get("voice_name")
+        force_voice = data.get("force_voice", False)
         
         if not text:
             logger.error("❌ No text provided for TTS")
@@ -159,12 +171,10 @@ async def text_to_speech(request: Request):
             logger.info(f"🔍 Detected language: {detected_lang}")
             
             if not force_voice:
-                # Auto-select voice based on detected language
                 if detected_lang == 'arabic':
                     voice_name = 'orpheus-arabic'
                     logger.info("🎤 Auto-selected Arabic voice")
                 elif detected_lang == 'mixed':
-                    # For mixed, prefer Arabic voice if more than 30% Arabic
                     arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
                     total_alpha = len(re.findall(r'[\u0600-\u06FFa-zA-Z]', text))
                     if total_alpha > 0 and arabic_chars / total_alpha > 0.3:
@@ -177,27 +187,26 @@ async def text_to_speech(request: Request):
                     voice_name = 'orpheus-english'
                     logger.info("🎤 Auto-selected English voice")
         
-        # Default to English if still not set
         if not voice_name:
             voice_name = 'orpheus-english'
         
-        # Map voice names to Groq model IDs
+        # FIX: Updated voice mapping with correct model names
         voice_mapping = {
-            "orpheus-english": "orpheus-english",
-            "orpheus-arabic": "orpheus-arabic-saudi",
-            "arabic": "orpheus-arabic-saudi",  # Alias
-            "english": "orpheus-english",  # Alias
-            "Gacrux": "orpheus-english"  # Legacy fallback
+            "orpheus-english": "canopylabs/orpheus-tts-v1-english",
+            "orpheus-arabic": "canopylabs/orpheus-tts-v1-arabic-saudi",
+            "arabic": "canopylabs/orpheus-tts-v1-arabic-saudi",
+            "english": "canopylabs/orpheus-tts-v1-english",
+            "Gacrux": "canopylabs/orpheus-tts-v1-english"  # Legacy fallback
         }
         
-        groq_voice = voice_mapping.get(voice_name, "orpheus-english")
+        groq_model = voice_mapping.get(voice_name, "canopylabs/orpheus-tts-v1-english")
         
         logger.info(f"🗣️ Generating speech for text: '{text[:50]}...'")
-        logger.info(f"🎤 Using voice: {groq_voice}")
+        logger.info(f"🎤 Using model: {groq_model}")
         
-        # Generate TTS using Groq
+        # FIX: Generate TTS using correct model format
         response = groq_client.audio.speech.create(
-            model=groq_voice,
+            model=groq_model,  # Use full model name
             input=text
         )
         
@@ -213,8 +222,8 @@ async def text_to_speech(request: Request):
             "status": "success",
             "audio_data": base64_audio,
             "format": "wav",
-            "sample_rate": 24000,  # Groq default
-            "voice_used": groq_voice,
+            "sample_rate": 24000,
+            "voice_used": groq_model,
             "detected_language": detect_language(text)
         }
         
@@ -319,59 +328,59 @@ async def process_user_input(request: Request):
         session_id = data.get("session_id", "default")
         user_input = data.get("input", "").strip()
         is_clarification = data.get("is_clarification", False)
+        device_type = data.get("device_type", "desktop")
         
         if not user_input:
             raise HTTPException(status_code=400, detail="Missing 'input' field")
         
         logger.info(f"📥 HTTP request from session {session_id}: {user_input}")
+        logger.info(f"📱 Device type: {device_type}")
         
         # Create message
         if is_clarification:
-            # Clarification response - use "answer" key
             message = AgentMessage(
                 message_type=MessageType.CLARIFICATION_RESPONSE,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"answer": user_input, "input": user_input}  # Include both for compatibility
+                payload={"answer": user_input, "input": user_input, "device_type": device_type}
             )
-            logger.info(f"💬 Created clarification response message")
-            logger.info(f"💬 Payload: {message.payload}")
         else:
-            # New task request - use "input" key
             message = AgentMessage(
                 message_type=MessageType.TASK_REQUEST,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"input": user_input}
+                payload={"input": user_input, "device_type": device_type}
             )
-            logger.info(f"📋 Created task request message")
-            logger.info(f"📋 Payload: {message.payload}")
         
-        # IMPORTANT: Register pending response BEFORE publishing
         logger.info(f"⏳ Creating pending response for message ID: {message.message_id}")
         future = asyncio.Future()
         pending_responses[message.message_id] = future
         logger.info(f"📝 Registered pending response. Total pending: {len(pending_responses)}")
         logger.info(f"📝 Pending IDs: {list(pending_responses.keys())}")
         
-        # Now publish to Language Agent
+        # NEW: Send initial thinking update
+        await ThinkingStepManager.update_step(session_id, "Processing input...", message.message_id)
+        
         logger.info(f"📤 Publishing message to {Channels.LANGUAGE_INPUT}")
         await broker.publish(Channels.LANGUAGE_INPUT, message)
         
-        # Wait for response (with timeout)
         logger.info(f"⏰ Waiting up to 60s for response...")
         try:
             response = await asyncio.wait_for(future, timeout=60.0)
             logger.info(f"✅ Response received: {response}")
+            
+            # NEW: Clear thinking steps
+            await ThinkingStepManager.clear_steps(session_id)
+            
             return response
         except asyncio.TimeoutError:
             logger.error(f"❌ TIMEOUT waiting for response to message: {message.message_id}")
             logger.error(f"❌ Pending responses at timeout: {list(pending_responses.keys())}")
+            await ThinkingStepManager.clear_steps(session_id)
             raise HTTPException(status_code=504, detail="Request timeout")
         finally:
-            # Clean up
             if message.message_id in pending_responses:
                 pending_responses.pop(message.message_id)
                 logger.info(f"🗑️ Cleaned up pending response: {message.message_id}")
@@ -537,6 +546,41 @@ async def root():
             "execution": "UI automation"
         }
     }
+
+from fastapi.responses import StreamingResponse
+
+@app.get("/thinking-stream/{session_id}")
+async def thinking_stream(session_id: str):
+    """
+    Server-Sent Events stream for thinking updates
+    Frontend connects to this endpoint to receive real-time thinking steps
+    """
+    async def event_generator():
+        thinking_queue = asyncio.Queue()
+        
+        async def handle_thinking_update(message):
+            if hasattr(message, 'session_id') and message.session_id == session_id:
+                if hasattr(message, 'payload') and message.payload.get("action") == "thinking_update":
+                    await thinking_queue.put(message.payload.get("step"))
+        
+        # Subscribe to broadcast channel
+        broker.subscribe(Channels.BROADCAST, handle_thinking_update)
+        
+        try:
+            while True:
+                try:
+                    # Wait for thinking updates with timeout
+                    step = await asyncio.wait_for(thinking_queue.get(), timeout=30)
+                    yield f"data: {step}\n\n"
+                except asyncio.TimeoutError:
+                    # Keep connection alive with heartbeat
+                    yield ": heartbeat\n\n"
+        except GeneratorExit:
+            logger.info(f"🔌 Client disconnected from thinking stream: {session_id}")
+        except Exception as e:
+            logger.error(f"❌ Thinking stream error: {e}")
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

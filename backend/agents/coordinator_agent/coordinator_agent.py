@@ -17,6 +17,7 @@ from agents.utils.protocol import (
     ExecutionResult, TaskMessage
 )
 from agents.utils.broker import broker
+from ThinkingStepManager import ThinkingStepManager
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -169,11 +170,15 @@ class CoordinatorState(BaseModel):
 # --- Plan Decomposition with Groq LLM ---
 async def decompose_task_to_actions(
     user_request: Dict[str, Any],
-    preferences_context: str
+    preferences_context: str,
+    device_type: str = "desktop"  # NEW: Add device_type parameter
 ) -> Dict[str, Any]:
     """Decompose user request into ActionTask queue using Groq LLM"""
     
-    prompt = f"""You are the AURA Task Decomposition Agent. Convert user requests into low-level executable tasks.
+    # Add device hint to the prompt
+    device_hint = f"The user is on a {device_type} device. Tailor task recommendations accordingly (e.g., use 'mobile' apps for mobile devices).\n\n"
+    
+    prompt = f"""{device_hint}You are the AURA Task Decomposition Agent. Convert user requests into low-level executable tasks.
 
 # USER REQUEST
 {json.dumps(user_request, indent=2)}
@@ -269,15 +274,15 @@ User: "Open Notepad"
 
 Return:
 [
-  {
+  {{
     "task_id": "task_1",
     "ai_prompt": "Open Notepad",
     "device": "desktop",
     "context": "local",
     "target_agent": "action",
-    "extra_params": {"app_name": "notepad.exe"},
+    "extra_params": {{"app_name": "notepad"}},
     "depends_on": null
-  }
+  }}
 ]
 
 User: "Download latest Moodle assignment and summarize it to Notepad"
@@ -435,6 +440,8 @@ Generate the task decomposition now:"""
             raise ValueError("Invalid task decomposition format")
 
         logger.info(f"📋 Decomposed into {len(action_tasks)} tasks")
+        logger.info(f"{action_tasks}")
+        print(f"TASKS: {action_tasks}")
         return {"tasks": action_tasks}
 
         
@@ -454,22 +461,29 @@ def create_coordinator_graph():
         session_id = state.get("session_id")
         user_id = state.get("user_id", "default_user")
         original_message_id = state.get("original_message_id")
+        device_type = raw_task.get("device_type", "desktop")  # NEW: Extract device_type
 
         # Retrieve user preferences
         try:
+            from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
             pref_mgr = get_preference_manager(user_id)
-            query = raw_task.get("action", "")
-            preferences = pref_mgr.get_relevant_preferences(query=query, limit=5)
-            preferences_context = pref_mgr.format_for_llm(preferences)
-            logger.info(f"✅ Retrieved {len(preferences)} preferences for user {user_id}")
+            preferences_context = pref_mgr.get_relevant_preferences(
+                str(raw_task.get("confirmation", "")), limit=10
+            )
         except Exception as e:
-            logger.error(f"❌ Failed to retrieve preferences: {e}")
-            preferences_context = "No stored user preferences."
+            logger.warning(f"⚠️ Could not retrieve preferences: {e}")
+            preferences_context = "No user preferences available"
 
-        # Decompose task
-        plan_result = await decompose_task_to_actions(raw_task, preferences_context)
+        # Decompose task - pass device_type to the prompt
+        plan_result = await decompose_task_to_actions(raw_task, preferences_context, device_type)  # NEW: Pass device_type
         
         tasks = plan_result.get("tasks", [])
+        
+        # NEW: Set device in all tasks if not already set
+        for task in tasks:
+          if task.device is None:
+             task.device = device_type
+
         
         return {
             "input": state["input"],
@@ -512,9 +526,11 @@ def create_coordinator_graph():
             if current_task.depends_on:
                 dep_ids = current_task.depends_on.split(",")
                 dependencies_met = all(
-                    results.get(dep_id.strip(), {}).get("status") == "success"
-                    for dep_id in dep_ids
+                   results.get(dep_id.strip()) 
+                   and results.get(dep_id.strip()).status == "success"
+                   for dep_id in dep_ids
                 )
+
                 
                 if not dependencies_met:
                     logger.warning(f"⏭️ Skipping {current_task.task_id} - dependencies not met")
@@ -754,6 +770,10 @@ async def start_coordinator_agent(broker_instance):
 
         http_request_id = message.response_to if message.response_to else message.message_id
         user_id = message.payload.get("user_id", "default_user")
+        session_id = message.session_id
+        
+        # NEW: Send thinking update
+        await ThinkingStepManager.update_step(session_id, "Formulating plan...", http_request_id)
         
         # Check if this is a new task while executing
         if task_queue.has_tasks() and not task_queue.is_stopped:
@@ -764,19 +784,25 @@ async def start_coordinator_agent(broker_instance):
         # Execute task
         state_input = {
             "input": message.payload,
-            "session_id": message.session_id,
+            "session_id": session_id,
             "original_message_id": http_request_id,
             "user_id": user_id
         }
         config = {
             "configurable": {
-                "thread_id": message.session_id,
+                "thread_id": session_id,
                 "user_id": user_id
             }
         }
 
+        # NEW: Send thinking update
+        await ThinkingStepManager.update_step(session_id, "Decomposing tasks...", http_request_id)
+
         result = await coordinator_graph.ainvoke(state_input, config)
         logger.info(f"✅ Task processing complete: {result.get('status')}")
+        
+        # NEW: Send thinking update
+        await ThinkingStepManager.update_step(session_id, "Organizing execution...", http_request_id)
     
     async def handle_action_result(message: AgentMessage):
         """Handle result from Action/Reasoning layer"""
@@ -849,7 +875,7 @@ async def start_coordinator_agent(broker_instance):
     broker_instance.subscribe(Channels.LANGUAGE_TO_COORDINATOR, handle_task_from_language)
     broker_instance.subscribe(Channels.EXECUTION_TO_COORDINATOR, handle_action_result)
     broker_instance.subscribe(Channels.REASONING_TO_COORDINATOR, handle_action_result)
-    broker_instance.subscribe(Channels.INTERRUPT_CONTROL, handle_interrupt_command)
+    # broker_instance.subscribe(Channels.INTERRUPT_CONTROL, handle_interrupt_command)
     broker_instance.subscribe(Channels.SESSION_CONTROL, handle_session_control)
     
     logger.info("✅ Coordinator Agent started with RAG action layer support")

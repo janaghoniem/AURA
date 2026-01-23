@@ -1,8 +1,5 @@
 import React, { useMemo, useState } from "react";
 
-/* =========================
-   Greeting Dictionaries
-========================= */
 const GREETINGS = {
   default: [
     "👋 Hello {user}",
@@ -24,9 +21,6 @@ const GREETINGS = {
   minimal: ["🌟 Hello", "📌 Ready to assist"],
 };
 
-/* =========================
-   Headline Dictionary
-========================= */
 const HEADLINES = [
   "What would you like done today?",
   "Let's continue where you left off",
@@ -36,9 +30,6 @@ const HEADLINES = [
   "Your assistant is ready",
 ];
 
-/* =========================
-   Time-Sensitive Cute Greeting
-========================= */
 const getTimeGreeting = (user) => {
   const hour = new Date().getHours();
 
@@ -51,16 +42,9 @@ const getTimeGreeting = (user) => {
   return `💤 Burning the midnight oil, ${user}?`;
 };
 
-/* =========================
-   HeaderContent Component
-========================= */
-const HeaderContent = ({
-  username = "Labubu",
-  mode = "default", // focus | friendly | minimal | default
-}) => {
-  const [greeting] = useState(getTimeGreeting(username)); // single greeting per load
+const HeaderContent = ({ userName = "Labubu", mode = "default" }) => {
+  const [greeting] = useState(getTimeGreeting(userName));
 
-  // Random headline
   const headline = useMemo(() => {
     return HEADLINES[Math.floor(Math.random() * HEADLINES.length)];
   }, []);

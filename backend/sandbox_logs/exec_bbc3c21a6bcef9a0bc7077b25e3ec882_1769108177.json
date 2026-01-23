@@ -1,0 +1,20 @@
+{
+  "code": "import time\nimport pyautogui\n\n# Press Windows key to open Start menu\npyautogui.press('win')\ntime.sleep(1)\n\n# Type \"WhatsApp\" to search for the application\npyautogui.write('WhatsApp', interval=0.1)\ntime.sleep(1)\n\n# Press Enter to launch WhatsApp\npyautogui.press('enter')\ntime.sleep(3)\n\n# Verify WhatsApp window appears by checking for a unique element\ntry:\n    # Look for WhatsApp title bar or icon on screen\n    whatsapp_found = pyautogui.locateOnScreen('whatsapp_icon.png', confidence=0.8)\n    if whatsapp_found:\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        # Fallback: check if any window with WhatsApp in title exists\n        import pygetwindow as gw\n        whatsapp_windows = [w for w in gw.getAllTitles() if 'WhatsApp' in w]\n        if whatsapp_windows:\n            print(\"EXECUTION_SUCCESS\")\n        else:\n            print(\"FAILED: WhatsApp window not detected\")\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "success",
+    "exit_code": 0,
+    "stdout": "FAILED: The confidence keyword argument is only available if OpenCV is installed.\n",
+    "stderr": "",
+    "execution_time": 6.5483620166778564,
+    "timestamp": "2026-01-22T20:56:17.365258",
+    "validation_passed": false,
+    "validation_errors": [
+      "Code reported failure: FAILED:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "bbc3c21a6bcef9a0bc7077b25e3ec882",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:56:17.366258"
+}

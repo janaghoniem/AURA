@@ -1,0 +1,21 @@
+{
+  "code": "import pyautogui\nimport time\nimport uiautomation as auto\n\ntry:\n    # Press Win key to open Start menu\n    pyautogui.hotkey('win')\n    time.sleep(1)\n    # Type \"notepad\" to search\n    pyautogui.typewrite('notepad')\n    time.sleep(1)\n    # Press Enter to launch\n    pyautogui.press('enter')\n    time.sleep(2)\n    # Verify Notepad window exists\n    np = auto.WindowControl(searchDepth=1, ClassName='Notepad')\n    if np.Exists(3, 1):\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        print(\"FAILED: Notepad window not found\")\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpyj22147o.py\", line 3, in <module>\n    import uiautomation as auto\nModuleNotFoundError: No module named 'uiautomation'\n",
+    "execution_time": 0.3745253086090088,
+    "timestamp": "2026-01-22T19:11:48.604260",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "02f51825132fce044d7d595e5666275c",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T19:11:48.606261"
+}

@@ -1,0 +1,18 @@
+{
+  "code": "import pyautogui\nimport time\n\ntry:\n    # Ensure focus is available for typing\n    time.sleep(0.5)\n    # Type the text\n    pyautogui.typewrite('hello habiba', interval=0.05)\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(\"FAILED:\", e)",
+  "result": {
+    "status": "success",
+    "exit_code": 0,
+    "stdout": "EXECUTION_SUCCESS\n",
+    "stderr": "",
+    "execution_time": 1.53989839553833,
+    "timestamp": "2026-01-22T20:43:14.629705",
+    "validation_passed": true,
+    "validation_errors": [],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "c430c904bdede1652deea5da0d3863db",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:43:14.630684"
+}

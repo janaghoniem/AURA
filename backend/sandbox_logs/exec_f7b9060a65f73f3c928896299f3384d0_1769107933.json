@@ -1,0 +1,18 @@
+{
+  "code": "import pyautogui\nimport time\n\ntry:\n    # Press Win key to open Start menu\n    pyautogui.press('win')\n    time.sleep(1)\n\n    # Type \"Clock\" to search\n    pyautogui.write('Clock', interval=0.1)\n    time.sleep(1)\n\n    # Press Enter to launch the first result\n    pyautogui.press('enter')\n    time.sleep(2)\n\n    # Verify window appeared by checking for unique title substring\n    import pygetwindow as gw\n    titles = [w.title for w in gw.getAllWindows() if w.title and 'clock' in w.title.lower()]\n    if not titles:\n        raise Exception(\"Clock window not detected after launch\")\n\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(\"FAILED:\", str(e))",
+  "result": {
+    "status": "success",
+    "exit_code": 0,
+    "stdout": "EXECUTION_SUCCESS\n",
+    "stderr": "",
+    "execution_time": 5.171792268753052,
+    "timestamp": "2026-01-22T20:52:13.711121",
+    "validation_passed": true,
+    "validation_errors": [],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "f7b9060a65f73f3c928896299f3384d0",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:52:13.712121"
+}

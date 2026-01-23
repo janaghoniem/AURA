@@ -1,0 +1,21 @@
+{
+  "code": "import pyautogui\nimport time\nimport uiautomation as auto\n\ntry:\n    auto.uiautomation.SetGlobalSearchTimeout(10)\n    # Press Windows key to open Start menu\n    pyautogui.press('win')\n    time.sleep(1)\n    # Type \"word\" to search for Microsoft Word\n    pyautogui.write('word', interval=0.1)\n    time.sleep(1)\n    # Press Enter to launch the first result (Microsoft Word)\n    pyautogui.press('enter')\n    time.sleep(3)\n    # Verify Word opened by checking for a top-level window\n    word_window = auto.GetForegroundControl()\n    if word_window and \"word\" in word_window.Name.lower():\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        print(\"FAILED: Word window not detected\")\nexcept Exception as e:\n    print(\"FAILED: \" + str(e))",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpz66i5ekv.py\", line 1, in <module>\n    import pyautogui\nModuleNotFoundError: No module named 'pyautogui'\n",
+    "execution_time": 0.09369134902954102,
+    "timestamp": "2026-01-22T18:53:49.124192",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "9f99d4d73a0739bc6a4a6a7afec48a3e",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T18:53:49.125195"
+}

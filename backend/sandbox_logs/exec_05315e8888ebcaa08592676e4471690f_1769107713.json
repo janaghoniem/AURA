@@ -1,0 +1,18 @@
+{
+  "code": "import pyautogui\nimport time\n\ntry:\n    # Open Calculator via Run dialog\n    pyautogui.hotkey('win', 'r')\n    time.sleep(0.5)\n    pyautogui.typewrite('calc')\n    pyautogui.press('enter')\n    time.sleep(1)\n\n    # Type 22\n    pyautogui.typewrite('22')\n    time.sleep(0.2)\n\n    # Press '+'\n    pyautogui.press('+')\n    time.sleep(0.2)\n\n    # Type 24\n    pyautogui.typewrite('24')\n    time.sleep(0.2)\n\n    # Press Enter to calculate\n    pyautogui.press('enter')\n    time.sleep(0.5)\n\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(\"FAILED:\", e)",
+  "result": {
+    "status": "success",
+    "exit_code": 0,
+    "stdout": "EXECUTION_SUCCESS\n",
+    "stderr": "",
+    "execution_time": 3.6929585933685303,
+    "timestamp": "2026-01-22T20:48:33.705254",
+    "validation_passed": true,
+    "validation_errors": [],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "05315e8888ebcaa08592676e4471690f",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:48:33.706253"
+}

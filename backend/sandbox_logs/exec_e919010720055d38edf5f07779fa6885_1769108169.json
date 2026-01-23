@@ -1,0 +1,21 @@
+{
+  "code": "import pyautogui\nimport time\nimport uiautomation as auto\n\ndef open_whatsapp():\n    try:\n        # Press Windows key to open Start menu\n        pyautogui.press('win')\n        time.sleep(0.5)\n        # Type WhatsApp\n        pyautogui.write('WhatsApp', interval=0.1)\n        time.sleep(0.5)\n        # Press Enter to launch\n        pyautogui.press('enter')\n        time.sleep(2)\n        # Verify WhatsApp window appears\n        whatsapp = auto.WindowControl(searchDepth=1, ClassName='Chrome_WidgetWin_1')\n        if whatsapp.Exists():\n            print(\"EXECUTION_SUCCESS\")\n        else:\n            print(\"FAILED: WhatsApp window not found\")\n    except Exception as e:\n        print(f\"FAILED: {e}\")\n\nopen_whatsapp()",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmprlluewhw.py\", line 3, in <module>\n    import uiautomation as auto\nModuleNotFoundError: No module named 'uiautomation'\n",
+    "execution_time": 0.33091068267822266,
+    "timestamp": "2026-01-22T20:56:09.615793",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "e919010720055d38edf5f07779fa6885",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:56:09.617652"
+}

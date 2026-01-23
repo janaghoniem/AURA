@@ -1,0 +1,21 @@
+{
+  "code": "import pyautogui\nimport time\nimport uiautomation as auto\n\ntry:\n    # Press Win key to open Start menu\n    pyautogui.press('win')\n    time.sleep(1)\n\n    # Type \"Clock\" to search\n    pyautogui.write('Clock', interval=0.05)\n    time.sleep(1)\n\n    # Press Enter to launch the first result\n    pyautogui.press('enter')\n    time.sleep(2)\n\n    # Verify the Clock app window appeared\n    desktop = auto.GetRootControl()\n    clock_window = None\n    for window in desktop.GetChildren():\n        if window.ControlType == auto.ControlType.WindowControl and 'clock' in window.Name.lower():\n            clock_window = window\n            break\n\n    if clock_window:\n        print(\"EXECUTION_SUCCESS\")\n    else:\n        print(\"FAILED: Clock app window not detected after launch\")\n\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpyihf1or4.py\", line 3, in <module>\n    import uiautomation as auto\nModuleNotFoundError: No module named 'uiautomation'\n",
+    "execution_time": 0.36429572105407715,
+    "timestamp": "2026-01-22T20:51:07.387133",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "5a450b6016b539e15a442b2d0e2c6589",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:51:07.389181"
+}

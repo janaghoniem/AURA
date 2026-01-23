@@ -45,8 +45,8 @@ class RAGConfig:
     library_name: str = "pywinauto"
     
     # Paths
-    vectordb_dir: Path = None
-    models_dir: Path = None
+    vectordb_dir: Path = Path(r"D:\YUSR\agents\execution_agent\RAG\vector_db")
+    models_dir: Path = Path(r"D:\YUSR\agents\execution_agent\RAG\models")
     
     # Retrieval settings
     top_k: int = 5  # Number of similar chunks to retrieve
@@ -98,21 +98,21 @@ class VectorDBInterface:
         print("Connecting to vector database...")
         
         # Load ChromaDB
-        self.client = chromadb.PersistentClient(
-            path=str(self.config.vectordb_dir)
-        )
+        # self.client = chromadb.PersistentClient(
+        #     path=str(self.config.vectordb_dir)
+        # )
         
-        # Get collection
-        self.collection = self.client.get_collection(
-            name=f"{self.config.library_name}_embeddings"
-        )
+        # # Get collection
+        # self.collection = self.client.get_collection(
+        #     name=f"{self.config.library_name}_embeddings"
+        # )
         
         print(f"Connected to collection: {self.collection.name}")
         print(f"Total documents: {self.collection.count()}")
         
         # Load embedding model
-        model_path = self.config.models_dir / "embedding_model"
-        self.embedding_model = SentenceTransformer(str(model_path))
+        # model_path = self.config.models_dir / "embedding_model"
+        # self.embedding_model = SentenceTransformer(str(model_path))
         print(f"Embedding model loaded")
     
     def search(self, query: str, n_results: int = None) -> Dict:
@@ -342,14 +342,14 @@ class RAGSystem:
     
     def __init__(self, config: RAGConfig):
         self.config = config
-        self.vectordb = VectorDBInterface(config)
+        # self.vectordb = VectorDBInterface(config)
         self.llm = LLMInterface(config)
         self.conversation_history = []
         
     def initialize(self):
         """Initialize RAG system"""
         print("Initializing RAG System...")
-        self.vectordb.initialize()
+        # self.vectordb.initialize()
         print("RAG System ready!")
     
     def generate_code(self, user_query: str, cache_key: str = None,  # ← ADD THIS
@@ -452,6 +452,10 @@ Do not assume the exact path of the executable or window title.
         
         # Parse response
         result = self._parse_response(response, contexts)
+        
+        print("\n[2/4] printing prompt...")
+        print(result)
+        print("-" * 40)
         
         # Store in conversation history
         self.conversation_history.append({

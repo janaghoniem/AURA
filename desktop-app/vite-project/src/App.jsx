@@ -1,7 +1,9 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import Sidebar from "./components/SideBar";
 import HeaderContent from "./components/HeaderContent";
 import VoiceControls from "./components/VoiceControls";
+import SettingsModal from "./components/SettingsModal";
+import ThinkingIndicator from "./components/ThinkingIndicator";
 
 function App() {
   /* ---------- STATE ---------- */
@@ -13,10 +15,73 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [chatMode, setChatMode] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [deviceType, setDeviceType] = useState("desktop");
+  const [userName, setUserName] = useState("Labubu");
+  const [thinkingSteps, setThinkingSteps] = useState([]);
+  const [isThinking, setIsThinking] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(new Audio());
+
+  /* ---------- DEVICE DETECTION & RESPONSIVE LAYOUT ---------- */
+  useEffect(() => {
+    const handleResize = () => {
+      const width = window.innerWidth;
+      if (width < 768) {
+        setDeviceType("mobile");
+        setIsSidebarCollapsed(true);
+      } else {
+        setDeviceType("desktop");
+      }
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  /* ---------- LOAD USERNAME FROM LOCALSTORAGE ---------- */
+  useEffect(() => {
+    const savedName = localStorage.getItem("userName");
+    if (savedName) {
+      setUserName(savedName);
+    }
+  }, []);
+
+    /* ---------- CONNECT TO THINKING STREAM ---------- */
+  useEffect(() => {
+    const eventSource = new EventSource(`http://localhost:8000/thinking-stream/${sessionId}`);
+    
+    // Inside your useEffect for SSE
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.steps) {
+        setThinkingSteps(data.steps); // This now receives ['Step 1', 'Step 2']
+      }
+    };
+     
+    eventSource.onerror = () => {
+      console.warn("[UI] Thinking stream disconnected");
+      eventSource.close();
+    };
+    
+    return () => eventSource.close();
+  }, [sessionId]);
+
+  /* ---------- HANDLE THINKING UPDATES ---------- */
+  const handleThinkingUpdate = (step) => {
+    console.log("[UI] Updating thinking step:", step);
+    setThinkingSteps(prev => {
+      // Avoid duplicates
+      if (prev.includes(step)) return prev;
+      return [...prev, step];
+    });
+    
+    // Ensure thinking indicator is visible
+    setIsThinking(true);
+  };
 
   /* ---------- UI ACTIONS ---------- */
   const handleCancel = () => {
@@ -24,6 +89,28 @@ function App() {
     setOrbState("idle");
     setUserMessage("");
     setChatMode(true);
+  };
+
+  const handleNewChat = () => {
+    console.log("[UI] New chat started");
+    setUserMessage("");
+    setAssistantMessage("");
+    setThinkingSteps([]);
+    setIsThinking(false);
+    setChatMode(false);
+  };
+
+  /* ---------- THINKING STEPS SIMULATION ---------- */
+  const startThinkingSequence = async () => {
+    setIsThinking(true);
+    const steps = ["Searching...", "Analyzing...", "Processing...", "Responding..."];
+    
+    for (let i = 0; i < steps.length; i++) {
+      setThinkingSteps(prev => [...prev, steps[i]]);
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
+    
+    setIsThinking(false);
   };
 
   /* ---------- AUDIO RECORDING ---------- */
@@ -120,6 +207,8 @@ function App() {
 
       setOrbState("processing");
       setUserMessage(text);
+      setThinkingSteps([]);
+      setIsThinking(false);
 
       // Skip STT completely → go directly to agent
       await processText(text);
@@ -131,14 +220,45 @@ function App() {
     }
   };
 
+  /* ---------- SETTINGS & STOP DETECTION ---------- */
+  const handleSettingsClick = () => {
+    setShowSettings(!showSettings);
+  };
+
+  const handleSettingsSave = (profileData) => {
+    console.log("[Settings] Saving profile:", profileData);
+    localStorage.setItem("userName", profileData.username);
+    setUserName(profileData.username);
+  };
+
   /* ---------- TEXT → AGENT ---------- */
   const processText = async (text) => {
     try {
       console.log("[Agent] Processing input:", text);
-      console.log(
-        "[Agent] Clarification mode:",
-        !!clarificationResponseToId
-      );
+
+      // Detect "stop" command
+      if (text.toLowerCase().includes("stop")) {
+        console.log("[Agent] STOP command detected - initiating stop sequence");
+        handleStopSequence();
+        return;
+      }
+
+      // Detect settings request
+      if (
+        text.toLowerCase().includes("settings") ||
+        text.toLowerCase().includes("open settings") ||
+        text.toLowerCase().includes("show settings")
+      ) {
+        console.log("[Agent] Settings request detected");
+        setShowSettings(true);
+        setAssistantMessage("Opening settings for you");
+        return;
+      }
+
+      console.log("[Agent] Clarification mode:", !!clarificationResponseToId);
+
+      // Start thinking sequence
+      await startThinkingSequence();
 
       const res = await fetch("http://localhost:8000/process", {
         method: "POST",
@@ -148,6 +268,7 @@ function App() {
           input: text,
           is_clarification: !!clarificationResponseToId,
           clarification_id: clarificationResponseToId || null,
+          device_type: deviceType,
         }),
       });
 
@@ -158,6 +279,9 @@ function App() {
       if (!res.ok) {
         throw new Error(data.detail || "Backend error");
       }
+
+      setThinkingSteps([]);
+      setIsThinking(false);
 
       if (data.status === "clarification_needed") {
         console.log("[Agent] Clarification requested:", data.question);
@@ -180,7 +304,23 @@ function App() {
       console.error("[Agent] Error:", error);
       setOrbState("idle");
       setAssistantMessage("Backend error");
+      setThinkingSteps([]);
+      setIsThinking(false);
     }
+  };
+
+  /* ---------- STOP SEQUENCE ---------- */
+  const handleStopSequence = () => {
+    console.log("[System] Executing stop sequence");
+    stopRecording();
+    setOrbState("idle");
+    setUserMessage("");
+    setAssistantMessage("Stop sequence initiated");
+    setIsRecording(false);
+    setChatMode(false);
+    setShowSettings(false);
+    setThinkingSteps([]);
+    setIsThinking(false);
   };
 
   /* ---------- TEXT → SPEECH ---------- */
@@ -204,7 +344,6 @@ function App() {
         throw new Error(data.detail || "TTS failed");
       }
 
-      // Convert base64 to blob correctly
       const binaryString = atob(data.audio_data);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
@@ -252,34 +391,30 @@ function App() {
           console.log("[UI] Sidebar toggled");
           setIsSidebarCollapsed((p) => !p);
         }}
+        onSettingsClick={handleSettingsClick}
+        onNewChat={handleNewChat}
       />
 
-      <main className="main-area">
+      <main className={`main-area ${isSidebarCollapsed && deviceType === "mobile" ? "mobile-sidebar-open" : ""}`}>
+        <video autoPlay muted loop playsInline>
+          <source src="/Background3.mp4" type="video/mp4" />
+        </video>
+        
         <div className="main-overlay">
           {/* Header stays at the top */}
-          <HeaderContent />
+          <HeaderContent userName={userName} />
 
-          <div className="chat-display-area">
-            {userMessage && (
-              <div className="message-item user">
-                <div className="message-avatar">U</div>
-                <div className="message-bubble">
-                  {userMessage}
-                </div>
+          {/* Thinking Indicator */}
+          {isThinking && <ThinkingIndicator steps={thinkingSteps} />}
+
+          {/* Response Display Area - Gemini Style */}
+          {assistantMessage && !isThinking && (
+            <div className="response-container">
+              <div className="response-message">
+                {assistantMessage}
               </div>
-            )}
-            
-            {assistantMessage && (
-              <div className="message-item assistant">
-                <div className="message-avatar" style={{ background: 'transparent', border: '1px solid #7a1fa2' }}>
-                  ✨
-                </div>
-                <div className="message-bubble">
-                  {assistantMessage}
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* VoiceControls stay at the bottom */}
           <VoiceControls
@@ -290,9 +425,19 @@ function App() {
             chatMode={chatMode}
             setChatMode={setChatMode}
             onSendText={handleTextSubmit}
+            onSettingsClick={handleSettingsClick}
           />
         </div>
       </main>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <SettingsModal 
+          onClose={() => setShowSettings(false)} 
+          onSave={handleSettingsSave}
+          initialName={userName}
+        />
+      )}
     </div>
   );
 }

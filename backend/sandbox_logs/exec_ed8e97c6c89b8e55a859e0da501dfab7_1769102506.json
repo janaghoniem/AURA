@@ -1,0 +1,21 @@
+{
+  "code": "import time\nimport keyboard\nimport pyautogui\n\ntry:\n    # Press Windows key to open Start menu\n    keyboard.press_and_release('win')\n    time.sleep(1)\n\n    # Type WhatsApp to search for it\n    keyboard.write('WhatsApp', delay=0.1)\n    time.sleep(2)\n\n    # Press Enter to launch WhatsApp\n    keyboard.press_and_release('enter')\n    time.sleep(5)\n\n    # Verify WhatsApp opened by checking for a common element\n    # Look for WhatsApp icon in taskbar or main window\n    if pyautogui.locateOnScreen('whatsapp_icon.png', confidence=0.8) is None:\n        # Fallback: check if any window with WhatsApp in title exists\n        import pygetwindow as gw\n        whatsapp_windows = [w for w in gw.getAllTitles() if 'WhatsApp' in w]\n        if not whatsapp_windows:\n            raise Exception(\"WhatsApp window not found after launch attempt\")\n    \n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(f\"FAILED: {str(e)}\")",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpn43ubf5p.py\", line 2, in <module>\n    import keyboard\nModuleNotFoundError: No module named 'keyboard'\n",
+    "execution_time": 0.20401406288146973,
+    "timestamp": "2026-01-22T19:21:46.948579",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "ed8e97c6c89b8e55a859e0da501dfab7",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T19:21:46.952582"
+}

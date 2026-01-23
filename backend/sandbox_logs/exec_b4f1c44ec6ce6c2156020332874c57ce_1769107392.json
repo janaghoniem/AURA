@@ -1,0 +1,21 @@
+{
+  "code": "import pyautogui\nimport time\nimport uiautomation as auto\n\ntry:\n    # Open Notepad via Run dialog\n    pyautogui.hotkey('win', 'r')\n    time.sleep(0.5)\n    pyautogui.typewrite('notepad')\n    time.sleep(0.2)\n    pyautogui.press('enter')\n    time.sleep(1)\n\n    # Type the text\n    pyautogui.typewrite('hello habiba')\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(f\"FAILED: {e}\")",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpr5iz0is8.py\", line 3, in <module>\n    import uiautomation as auto\nModuleNotFoundError: No module named 'uiautomation'\n",
+    "execution_time": 0.30971646308898926,
+    "timestamp": "2026-01-22T20:43:12.336405",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "b4f1c44ec6ce6c2156020332874c57ce",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T20:43:12.337418"
+}

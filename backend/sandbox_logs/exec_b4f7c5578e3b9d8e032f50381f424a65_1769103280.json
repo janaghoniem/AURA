@@ -1,0 +1,21 @@
+{
+  "code": "import pyautogui\nimport time\nimport uiautomation as auto\n\ntry:\n    auto.PressKey(auto.Keys.LWIN)\n    time.sleep(0.2)\n    pyautogui.typewrite(\"whatsapp\", interval=0.05)\n    time.sleep(0.5)\n    auto.PressKey(auto.Keys.ENTER)\n    time.sleep(2)\n    print(\"EXECUTION_SUCCESS\")\nexcept Exception as e:\n    print(\"FAILED: \" + str(e))",
+  "result": {
+    "status": "failed",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\a\\AppData\\Local\\Temp\\tmpundos573.py\", line 3, in <module>\n    import uiautomation as auto\nModuleNotFoundError: No module named 'uiautomation'\n",
+    "execution_time": 0.296616792678833,
+    "timestamp": "2026-01-22T19:34:40.582686",
+    "validation_passed": false,
+    "validation_errors": [
+      "Non-zero exit code: 1",
+      "Error indicator found in stderr: Error:"
+    ],
+    "security_passed": true,
+    "security_violations": [],
+    "code_hash": "b4f7c5578e3b9d8e032f50381f424a65",
+    "retry_count": 0
+  },
+  "timestamp": "2026-01-22T19:34:40.583686"
+}
