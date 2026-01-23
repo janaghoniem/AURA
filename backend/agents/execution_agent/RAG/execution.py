@@ -70,7 +70,7 @@ class SandboxConfig:
     logs_dir: Path = Path("sandbox_logs")
     
     def __post_init__(self):
-        self.sandbox_dir.mkdir(exist_ok=True)
+        # self.sandbox_dir.mkdir(exist_ok=True)
         self.logs_dir.mkdir(exist_ok=True)
 
 @dataclass
