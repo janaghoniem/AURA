@@ -86,11 +86,12 @@ Please respond with valid JSON only."""
 
             response = await self.llm.ainvoke(full_prompt)
             response_text = response.content if hasattr(response, 'content') else str(response)
-            
+            logger.info("REASONING RESPONSE "+response_text)
             # Parse JSON response
             try:
                 parsed_response = json.loads(response_text)
                 return {
+                    "task_id": task_payload.get("task_id"),
                     "status": "success",
                     "content": parsed_response.get("result", str(parsed_response)),
                     "metadata": parsed_response.get("metadata", {})
@@ -98,6 +99,7 @@ Please respond with valid JSON only."""
             except json.JSONDecodeError:
                 # If response isn't valid JSON, wrap it
                 return {
+                    "task_id": task_payload.get("task_id"),
                     "status": "success",
                     "content": response_text,
                     "metadata": {"notes": "Response was not in JSON format"}
@@ -106,6 +108,7 @@ Please respond with valid JSON only."""
         except Exception as e:
             logger.error(f"❌ Reasoning Agent Error: {e}")
             return {
+                "task_id": task_payload.get("task_id"),
                 "status": "failed",
                 "error": str(e)
             }
