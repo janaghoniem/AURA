@@ -300,12 +300,18 @@ async def start_language_agent(broker):
         session_id = message.session_id if hasattr(message, 'session_id') else "default_session"
         http_request_id = message.message_id if hasattr(message, 'message_id') else str(uuid.uuid4())
 
-        await ThinkingStepManager.update_step(session_id, "Analyzing your request...", http_request_id)
+        # NEW: Send thinking update
+        try:
+            await ThinkingStepManager.update_step(session_id, "Analyzing your request...", http_request_id)
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to send thinking update: {e}")
 
+        # Get or create agent for this session
         agent = get_or_create_agent(session_id, user_id)
 
         # Fetch Mem0 preferences
         try:
+            # NEW: Send thinking update
             await ThinkingStepManager.update_step(session_id, "Checking your preferences...", http_request_id)
             
             from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
@@ -362,12 +368,14 @@ async def start_language_agent(broker):
         except Exception as e:
             logger.error(f"❌ Failed to fetch memory: {e}")
 
+        # NEW: Send thinking update before calling agent
         await ThinkingStepManager.update_step(session_id, "Processing your request...", http_request_id)
 
         response, is_complete = agent.user_turn(input_text)
         print(f"🤖 Agent: {response}\n")
         
         if is_complete:
+            # NEW: Send thinking update
             await ThinkingStepManager.update_step(session_id, "Preparing for coordinator...", http_request_id)
             
             task_msg = AgentMessage(

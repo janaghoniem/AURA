@@ -1,49 +1,53 @@
 """
-Thinking Step Manager - FIXED: Progressive step broadcasting
+Thinking Step Manager - Tracks and broadcasts thinking progress
 """
 import asyncio
-from typing import List, Optional
+import logging
+from typing import Optional
 from agents.utils.protocol import AgentMessage, MessageType, AgentType, Channels
 from agents.utils.broker import broker
-import logging
 
 logger = logging.getLogger(__name__)
 
 class ThinkingStepManager:
-    active_sessions = {} # session_id -> { "history": [], "current": "" }
-
+    """Manages thinking step updates across agents"""
+    
+    # Global thinking steps being tracked
+    active_sessions = {}  # session_id -> current_step
+    
     @staticmethod
     async def update_step(session_id: str, step: str, message_id: str):
-        """FIX: Add delay between steps for progressive display"""
-        if session_id not in ThinkingStepManager.active_sessions:
-            ThinkingStepManager.active_sessions[session_id] = {"history": []}
+        """
+        Update thinking step for a session
         
-        session_data = ThinkingStepManager.active_sessions[session_id]
+        Args:
+            session_id: Session ID
+            step: Current step (e.g., "Processing input...", "Analyzing request...", etc)
+            message_id: Original HTTP request message ID
+        """
+        logger.info(f"🧠 [{session_id}] Thinking step: {step}")
         
-        # Check if step already exists to avoid duplicates
-        if step in session_data["history"]:
-            return
-        
-        # Add step to history
-        session_data["history"].append(step)
+        # Store current step
+        ThinkingStepManager.active_sessions[session_id] = step
         
         # Broadcast to frontend via broker
-        update_msg = AgentMessage(
-            message_type=MessageType.STATUS_UPDATE,
-            sender=AgentType.COORDINATOR,
-            receiver=AgentType.LANGUAGE,
-            session_id=session_id,
-            response_to=message_id,
-            payload={
-                "action": "thinking_update",
-                "steps": session_data["history"],  # Send the whole list
-                "session_id": session_id
-            }
-        )
-        await broker.publish(Channels.BROADCAST, update_msg)
-        
-        # FIX: Add small delay for visual feedback (300ms feels natural)
-        await asyncio.sleep(0.3)
+        try:
+            update_msg = AgentMessage(
+                message_type=MessageType.STATUS_UPDATE,
+                sender=AgentType.COORDINATOR,
+                receiver=AgentType.LANGUAGE,
+                session_id=session_id,
+                response_to=message_id,
+                payload={
+                    "action": "thinking_update",
+                    "step": step,
+                    "session_id": session_id
+                }
+            )
+            
+            await broker.publish(Channels.BROADCAST, update_msg)
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to broadcast thinking update: {e}")
     
     @staticmethod
     async def clear_steps(session_id: str):
@@ -51,22 +55,3 @@ class ThinkingStepManager:
         if session_id in ThinkingStepManager.active_sessions:
             del ThinkingStepManager.active_sessions[session_id]
             logger.info(f"🧠 [{session_id}] Cleared thinking steps")
-
-# Thinking step sequences for different flows
-THINKING_STEPS = {
-    "language_agent": [
-        "Analyzing your request...",
-        "Checking clarifications...",
-        "Preparing for coordinator...",
-    ],
-    "coordinator": [
-        "Formulating plan...",
-        "Decomposing tasks...",
-        "Organizing execution order...",
-    ],
-    "execution_agent": [
-        "Executing tasks...",
-        "Processing actions...",
-        "Collecting results...",
-    ],
-}

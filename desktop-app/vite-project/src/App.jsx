@@ -61,7 +61,7 @@ function App() {
         setThinkingSteps(data.steps); // This now receives ['Step 1', 'Step 2']
       }
     };
-    
+     
     eventSource.onerror = () => {
       console.warn("[UI] Thinking stream disconnected");
       eventSource.close();
