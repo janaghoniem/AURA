@@ -258,6 +258,11 @@ async def start_execution_agent_with_rag(broker_instance, rag_system, sandbox_pi
                 max_retries=2,
                 enable_cache=False  # Disable cache to avoid ChromaDB errors
             )
+
+            # FIX: Ensure result dict has task_id
+            result_dict = result.dict()
+            if "task_id" not in result_dict:
+                result_dict["task_id"] = task.task_id
             
             # FIX: Use correct MessageType
             from agents.utils.protocol import AgentMessage, MessageType, AgentType, Channels
@@ -277,9 +282,11 @@ async def start_execution_agent_with_rag(broker_instance, rag_system, sandbox_pi
             
         except Exception as e:
             logger.error(f"❌ Error processing execution request: {e}")
+
+            task_id = message.task_id or getattr(message.payload, 'task_id', 'unknown')
             
             error_result = TaskResult(
-                task_id=message.task_id or "unknown",
+                task_id=task_id,
                 status="failed",
                 error=str(e)
             )
