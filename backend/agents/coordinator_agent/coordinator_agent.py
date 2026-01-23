@@ -440,6 +440,8 @@ Generate the task decomposition now:"""
             raise ValueError("Invalid task decomposition format")
 
         logger.info(f"📋 Decomposed into {len(action_tasks)} tasks")
+        logger.info(f"{action_tasks}")
+        print(f"TASKS: {action_tasks}")
         return {"tasks": action_tasks}
 
         
