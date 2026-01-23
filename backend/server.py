@@ -1,7 +1,3 @@
-"""
-YUSR Main Server - Pub/Sub Architecture with Groq TTS/STT
-Starts all agents and provides HTTP API for Electron app
-"""
 import asyncio
 import logging
 import os
@@ -27,6 +23,7 @@ from agents.utils.protocol import (
     AgentMessage, MessageType, AgentType, Channels,
     ClarificationMessage
 )
+from ThinkingStepManager import ThinkingStepManager
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -199,6 +196,7 @@ async def text_to_speech(request: Request):
         # Generate TTS using Groq
         response = groq_client.audio.speech.create(
             model=groq_voice,
+            voice=groq_voice,
             input=text
         )
         
@@ -320,13 +318,13 @@ async def process_user_input(request: Request):
         session_id = data.get("session_id", "default")
         user_input = data.get("input", "").strip()
         is_clarification = data.get("is_clarification", False)
-        device_type = data.get("device_type", "desktop")  # NEW: Get device type
+        device_type = data.get("device_type", "desktop")
         
         if not user_input:
             raise HTTPException(status_code=400, detail="Missing 'input' field")
         
         logger.info(f"📥 HTTP request from session {session_id}: {user_input}")
-        logger.info(f"📱 Device type: {device_type}")  # NEW: Log device type
+        logger.info(f"📱 Device type: {device_type}")
         
         # Create message
         if is_clarification:
@@ -335,44 +333,44 @@ async def process_user_input(request: Request):
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"answer": user_input, "input": user_input, "device_type": device_type}  # NEW: Add device_type
+                payload={"answer": user_input, "input": user_input, "device_type": device_type}
             )
-            logger.info(f"💬 Created clarification response message")
-            logger.info(f"💬 Payload: {message.payload}")
         else:
             message = AgentMessage(
                 message_type=MessageType.TASK_REQUEST,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"input": user_input, "device_type": device_type}  # NEW: Add device_type
+                payload={"input": user_input, "device_type": device_type}
             )
-            logger.info(f"📋 Created task request message")
-            logger.info(f"📋 Payload: {message.payload}")
         
-        # IMPORTANT: Register pending response BEFORE publishing
         logger.info(f"⏳ Creating pending response for message ID: {message.message_id}")
         future = asyncio.Future()
         pending_responses[message.message_id] = future
         logger.info(f"📝 Registered pending response. Total pending: {len(pending_responses)}")
         logger.info(f"📝 Pending IDs: {list(pending_responses.keys())}")
         
-        # Now publish to Language Agent
+        # NEW: Send initial thinking update
+        await ThinkingStepManager.update_step(session_id, "Processing input...", message.message_id)
+        
         logger.info(f"📤 Publishing message to {Channels.LANGUAGE_INPUT}")
         await broker.publish(Channels.LANGUAGE_INPUT, message)
         
-        # Wait for response (with timeout)
         logger.info(f"⏰ Waiting up to 60s for response...")
         try:
             response = await asyncio.wait_for(future, timeout=60.0)
             logger.info(f"✅ Response received: {response}")
+            
+            # NEW: Clear thinking steps
+            await ThinkingStepManager.clear_steps(session_id)
+            
             return response
         except asyncio.TimeoutError:
             logger.error(f"❌ TIMEOUT waiting for response to message: {message.message_id}")
             logger.error(f"❌ Pending responses at timeout: {list(pending_responses.keys())}")
+            await ThinkingStepManager.clear_steps(session_id)
             raise HTTPException(status_code=504, detail="Request timeout")
         finally:
-            # Clean up
             if message.message_id in pending_responses:
                 pending_responses.pop(message.message_id)
                 logger.info(f"🗑️ Cleaned up pending response: {message.message_id}")
@@ -538,6 +536,38 @@ async def root():
             "execution": "UI automation"
         }
     }
+
+from fastapi.responses import StreamingResponse
+
+@app.get("/thinking-stream/{session_id}")
+async def thinking_stream(session_id: str):
+    """
+    Server-Sent Events stream for thinking updates
+    Frontend connects to this endpoint to receive real-time thinking steps
+    """
+    async def event_generator():
+        # Subscribe to thinking updates for this session
+        thinking_queue = asyncio.Queue()
+        
+        async def handle_thinking_update(message):
+            if message.session_id == session_id and message.payload.get("action") == "thinking_update":
+                await thinking_queue.put(message.payload.get("step"))
+        
+        broker.subscribe(Channels.BROADCAST, handle_thinking_update)
+        
+        try:
+            while True:
+                # Wait for thinking updates with timeout
+                try:
+                    step = await asyncio.wait_for(thinking_queue.get(), timeout=30)
+                    yield f"data: {step}\n\n"
+                except asyncio.TimeoutError:
+                    # Keep connection alive
+                    yield ": heartbeat\n\n"
+        except GeneratorExit:
+            logger.info(f"🔌 Client disconnected from thinking stream: {session_id}")
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

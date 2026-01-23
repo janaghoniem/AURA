@@ -17,6 +17,7 @@ from agents.utils.protocol import (
     ExecutionResult, TaskMessage
 )
 from agents.utils.broker import broker
+from ThinkingStepManager import ThinkingStepManager
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -767,6 +768,10 @@ async def start_coordinator_agent(broker_instance):
 
         http_request_id = message.response_to if message.response_to else message.message_id
         user_id = message.payload.get("user_id", "default_user")
+        session_id = message.session_id
+        
+        # NEW: Send thinking update
+        await ThinkingStepManager.update_step(session_id, "Formulating plan...", http_request_id)
         
         # Check if this is a new task while executing
         if task_queue.has_tasks() and not task_queue.is_stopped:
@@ -777,19 +782,25 @@ async def start_coordinator_agent(broker_instance):
         # Execute task
         state_input = {
             "input": message.payload,
-            "session_id": message.session_id,
+            "session_id": session_id,
             "original_message_id": http_request_id,
             "user_id": user_id
         }
         config = {
             "configurable": {
-                "thread_id": message.session_id,
+                "thread_id": session_id,
                 "user_id": user_id
             }
         }
 
+        # NEW: Send thinking update
+        await ThinkingStepManager.update_step(session_id, "Decomposing tasks...", http_request_id)
+
         result = await coordinator_graph.ainvoke(state_input, config)
         logger.info(f"✅ Task processing complete: {result.get('status')}")
+        
+        # NEW: Send thinking update
+        await ThinkingStepManager.update_step(session_id, "Organizing execution...", http_request_id)
     
     async def handle_action_result(message: AgentMessage):
         """Handle result from Action/Reasoning layer"""

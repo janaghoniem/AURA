@@ -50,6 +50,39 @@ function App() {
     }
   }, []);
 
+    /* ---------- CONNECT TO THINKING STREAM ---------- */
+  useEffect(() => {
+    const eventSource = new EventSource(`http://localhost:8000/thinking-stream/${sessionId}`);
+    
+    // Inside your useEffect for SSE
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.steps) {
+        setThinkingSteps(data.steps); // This now receives ['Step 1', 'Step 2']
+      }
+    };
+    
+    eventSource.onerror = () => {
+      console.warn("[UI] Thinking stream disconnected");
+      eventSource.close();
+    };
+    
+    return () => eventSource.close();
+  }, [sessionId]);
+
+  /* ---------- HANDLE THINKING UPDATES ---------- */
+  const handleThinkingUpdate = (step) => {
+    console.log("[UI] Updating thinking step:", step);
+    setThinkingSteps(prev => {
+      // Avoid duplicates
+      if (prev.includes(step)) return prev;
+      return [...prev, step];
+    });
+    
+    // Ensure thinking indicator is visible
+    setIsThinking(true);
+  };
+
   /* ---------- UI ACTIONS ---------- */
   const handleCancel = () => {
     console.log("[UI] Cancel pressed → switching to chat mode");
