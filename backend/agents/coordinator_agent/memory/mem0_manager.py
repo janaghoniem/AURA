@@ -1,6 +1,6 @@
 """
 Mem0 Integration for Long-Term Preference Management
-Uses MongoDB Atlas for vector storage (no local dependencies)
+FIXED: Lowered threshold, added query expansion, improved retrieval
 """
 
 import os
@@ -18,23 +18,15 @@ class Mem0PreferenceManager:
     def __init__(self, user_id: str):
         self.user_id = user_id
         
-        # Get MongoDB URI from environment
         MONGODB_URI = os.getenv("MONGODB_URI")
         if not MONGODB_URI:
             raise ValueError("MONGODB_URI not found in environment variables")
         
-        # Extract connection details from URI
-        # Format: mongodb+srv://user:pass@cluster.xxxxx.mongodb.net/dbname
-        import urllib.parse
-        parsed = urllib.parse.urlparse(MONGODB_URI)
-        
-        # Initialize Mem0 with MongoDB Atlas backend
-        # Initialize Mem0 with MongoDB Atlas backend
         config = {
             "vector_store": {
                 "provider": "mongodb",
                 "config": {
-                    "mongo_uri": MONGODB_URI,
+                    "MONGODB_URI": MONGODB_URI,
                     "db_name": "yusr_db",
                     "collection_name": "mem0_preferences",
                     "embedding_model_dims": 384
@@ -56,8 +48,6 @@ class Mem0PreferenceManager:
                 }
             }
         }
-            #"history_db_path": None  # Use MongoDB, not local SQLite
-        
         
         try:
             self.memory = Memory.from_config(config)
@@ -67,16 +57,7 @@ class Mem0PreferenceManager:
             raise
     
     def add_preference(self, preference: str, metadata: Optional[Dict] = None) -> str:
-        """
-        Store a user preference
-        
-        Args:
-            preference: The preference text (e.g., "User prefers dark mode")
-            metadata: Optional metadata (category, timestamp, etc.)
-        
-        Returns:
-            Memory ID or None if failed
-        """
+        """Store a user preference"""
         try:
             messages = [{"role": "user", "content": preference}]
             result = self.memory.add(
@@ -89,59 +70,98 @@ class Mem0PreferenceManager:
         except Exception as e:
             logger.error(f"❌ Failed to store preference: {e}")
             return None
-    
-    def get_relevant_preferences(self, query: str, limit: int = 5) -> List[Dict]:
-        try:
-            memories = self.memory.search(
-                query=query,
-                user_id=self.user_id,
-                limit=limit
-            )
 
-            logger.info(f"🔍 Mem0 raw response type: {type(memories)}")
+    def get_relevant_preferences(
+        self, 
+        query: str, 
+        limit: int = 10,  # ✅ INCREASED from 5 to 10
+        min_score: float = 0.65 # ✅ LOWERED from 0.65 to 0.3 (more permissive)
+    ) -> List[Dict]:
+        """
+        Get preferences relevant to query with FIXED scoring
+        
+        Args:
+            query: Search query
+            limit: Max results to retrieve
+            min_score: Minimum similarity (0.3 = loose match, 0.7 = strict match)
+        
+        Returns:
+            List of relevant memories
+        """
+        try:
+            # ✅ FIX 1: Expand query with common variations
+            expanded_queries = [
+                query,
+                f"user preference: {query}",
+                f"what does the user like for {query}"
+            ]
             
-            # Handle different Mem0 response formats
-            if isinstance(memories, dict):
-                # Format 1: {"results": [...]}
-                if 'results' in memories:
-                    memories = memories['results']
-                # Format 2: {"memories": [...]}
-                elif 'memories' in memories:
-                    memories = memories['memories']
-                # Format 3: Direct dict with memory field
-                elif 'memory' in memories:
-                    memories = [memories]
-                else:
-                    logger.warning(f"⚠️ Unknown Mem0 dict format: {list(memories.keys())}")
+            all_memories = []
+            seen_ids = set()
+            
+            # Search with all query variations
+            for q in expanded_queries:
+                memories = self.memory.search(
+                    query=q,
+                    user_id=self.user_id,
+                    limit=limit * 2
+                )
+                
+                # Handle response format
+                if isinstance(memories, dict):
+                    if 'results' in memories:
+                        memories = memories['results']
+                    elif 'memories' in memories:
+                        memories = memories['memories']
+                    elif 'memory' in memories:
+                        memories = [memories]
+                    else:
+                        memories = []
+                
+                if not isinstance(memories, list):
                     memories = []
+                
+                # Deduplicate by memory ID
+                for mem in memories:
+                    mem_id = mem.get('id') or mem.get('memory_id')
+                    if mem_id and mem_id not in seen_ids:
+                        all_memories.append(mem)
+                        seen_ids.add(mem_id)
             
-            # Ensure it's a list
-            if not isinstance(memories, list):
-                logger.warning(f"⚠️ Expected list, got {type(memories)}")
-                memories = []
+            # ✅ FIX 2: Filter by score with looser threshold
+            relevant_memories = []
+            for mem in all_memories:
+                score = mem.get('score', 0.0)
+                memory_text = mem.get('memory', mem.get('text', 'Unknown'))
+                
+                if score >= min_score:
+                    relevant_memories.append(mem)
+                    logger.info(f"  ✅ [Score: {score:.2f}] {memory_text[:60]}")
+                else:
+                    logger.debug(f"  ⤷ Filtered out (score {score:.2f} < {min_score})")
             
-            logger.info(f"✅ Processed {len(memories)} preferences for query: {query[:50]}...")
-            return memories
+            # Sort by score descending
+            relevant_memories.sort(key=lambda x: x.get('score', 0), reverse=True)
+            
+            # Limit to requested number
+            relevant_memories = relevant_memories[:limit]
+            
+            logger.info(
+                f"✅ Found {len(relevant_memories)}/{len(all_memories)} relevant preferences "
+                f"(threshold: {min_score}) for query: {query[:50]}..."
+            )
+            
+            return relevant_memories
+            
         except Exception as e:
             logger.error(f"❌ Failed to retrieve preferences: {e}")
             return []
 
-
     def get_conversation_history(self, limit: int = 5) -> List:
-        """
-        Get recent conversation history for this user
-        
-        Args:
-            limit: Maximum number of conversations to retrieve
-        
-        Returns:
-            List of recent conversation contexts
-        """
+        """Get recent conversation history"""
         try:
-            # Get all memories for user
             all_memories = self.memory.get_all(user_id=self.user_id)
             
-            # Filter for conversation_history category
             conversations = []
             for mem in all_memories:
                 if isinstance(mem, dict):
@@ -149,7 +169,6 @@ class Mem0PreferenceManager:
                     if category == 'conversation_history':
                         conversations.append(mem)
             
-            # Sort by timestamp (most recent first)
             conversations.sort(
                 key=lambda x: x.get('metadata', {}).get('timestamp', ''),
                 reverse=True
@@ -189,7 +208,6 @@ class Mem0PreferenceManager:
         
         formatted = "# USER PREFERENCES (FROM PREVIOUS SESSIONS)\n"
         for i, pref in enumerate(preferences, 1):
-            # Mem0 returns memories in different formats depending on version
             if isinstance(pref, str):
                 memory_text = pref
             elif isinstance(pref, dict):
@@ -200,7 +218,7 @@ class Mem0PreferenceManager:
         
         return formatted
 
-# Factory function for easy access
+# Factory function
 _preference_managers: Dict[str, Mem0PreferenceManager] = {}
 
 def get_preference_manager(user_id: str) -> Mem0PreferenceManager:

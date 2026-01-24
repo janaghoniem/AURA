@@ -296,7 +296,7 @@ async def start_language_agent(broker):
         print(f"📝 User said: {input_text}")
         print(f"📱 Device type: {device_type}")
 
-        user_id = payload_data.get("user_id", "default_user")
+        user_id = payload_data.get("user_id", "test_user")
         session_id = message.session_id if hasattr(message, 'session_id') else "default_session"
         http_request_id = message.message_id if hasattr(message, 'message_id') else str(uuid.uuid4())
 
@@ -317,7 +317,7 @@ async def start_language_agent(broker):
             from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
             pref_mgr = get_preference_manager(user_id)
             
-            all_memories = pref_mgr.get_relevant_preferences(input_text, limit=10)
+            all_memories = pref_mgr.get_relevant_preferences(input_text, limit=5)
             
             preferences = []
             conversation_history = []
@@ -341,30 +341,35 @@ async def start_language_agent(broker):
             
             if preferences:
                 context_parts.append("# USER PREFERENCES")
-                for i, pref in enumerate(preferences[:5], 1):
+                for i, pref in enumerate(preferences[:3], 1):
                     context_parts.append(f"{i}. {pref}")
             
             if conversation_history:
                 context_parts.append("\n# RECENT CONVERSATIONS")
-                for i, conv in enumerate(conversation_history[:3], 1):
+                for i, conv in enumerate(conversation_history[:2], 1):
                     context_parts.append(f"{i}. {conv}")
             
             memory_context = "\n".join(context_parts) if context_parts else "No previous context."
             
             print(f"🧠 Retrieved Memory Context:\n{memory_context}\n")
-            
+            #here
             if context_parts:
-                has_preferences = any(
-                    msg.get("role") == "system" and "Previous Context" in msg.get("content", "")
-                    for msg in agent.memory
-                )
+                # ✅ FIX: Always update context (don't just check if it exists)
+                memory_msg = {
+                    "role": "system", 
+                    "content": f"Previous Context:\n{memory_context}"
+                }
                 
-                if not has_preferences:
-                    agent.memory.insert(1, {
-                        "role": "system", 
-                        "content": f"Previous Context:\n{memory_context}"
-                    })
-                    logger.info("✅ Injected Mem0 context into conversation")
+                # Remove old context if exists
+                agent.memory = [msg for msg in agent.memory if "Previous Context" not in msg.get("content", "")]
+                
+                # Ensure system prompt is first
+                if agent.memory and agent.memory[0].get("role") == "system":
+                    agent.memory.insert(1, memory_msg)
+                else:
+                    agent.memory.insert(0, memory_msg)
+                
+                logger.info(f"✅ Injected {len(context_parts)} memory items into conversation")
         except Exception as e:
             logger.error(f"❌ Failed to fetch memory: {e}")
 
@@ -382,10 +387,12 @@ async def start_language_agent(broker):
                 message_type=MessageType.TASK_REQUEST,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.COORDINATOR,
+                session_id=session_id,
                 response_to=http_request_id,
                 payload={
                     "confirmation": response, 
-                    "device_type": device_type
+                    "device_type": device_type,
+                    "user_id": user_id,
                 }
             )
             await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, task_msg)

@@ -463,16 +463,100 @@ def create_coordinator_graph():
         original_message_id = state.get("original_message_id")
         device_type = raw_task.get("device_type", "desktop")  # NEW: Extract device_type
 
+        # # ✅ NEW: Check for previous execution state in checkpoint
+        # previous_execution_state = None
+        # if checkpointer and session_id:
+        #     try:
+        #         logger.info(f"🔍 Checking for previous execution state in session {session_id}")
+                
+        #         checkpoint_tuple = await checkpointer.aget_tuple(
+        #             config={"configurable": {"thread_id": session_id}}
+        #         )
+                
+        #         if checkpoint_tuple and checkpoint_tuple.checkpoint:
+        #             checkpoint_data = checkpoint_tuple.checkpoint
+        #             logger.debug(f"📦 Checkpoint data keys: {list(checkpoint_data.keys())}")
+                    
+        #             # Check for execution state
+        #             if "channel_values" in checkpoint_data:
+        #                 channel_vals = checkpoint_data["channel_values"]
+        #                 if "execution_state" in channel_vals:
+        #                     previous_execution_state = channel_vals["execution_state"]
+        #                     logger.info(f"🔄 Found previous execution state:")
+        #                     logger.info(f"   Completed: {previous_execution_state.get('completed_task_ids', [])}")
+        #                     logger.info(f"   Failed at: {previous_execution_state.get('failed_task_id', 'none')}")
+                    
+        #             # Also check direct key
+        #             elif "execution_state" in checkpoint_data:
+        #                 previous_execution_state = checkpoint_data["execution_state"]
+        #                 logger.info(f"🔄 Found execution state (direct): {previous_execution_state}")
+        #             else:
+        #                 logger.debug("No execution_state in checkpoint")
+        #         else:
+        #             logger.debug(f"No checkpoint found for session {session_id}")
+                    
+        #     except Exception as e:
+        #         logger.warning(f"⚠️ Could not retrieve checkpoint: {e}")
+        #         import traceback
+        #         logger.debug(traceback.format_exc())
+
         # Retrieve user preferences
         try:
             from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
             pref_mgr = get_preference_manager(user_id)
+            
+            # ✅ FIX: Check for previous failed task state
+            previous_execution_state = None
+            if checkpointer and session_id:
+                try:
+                    checkpoint_data = await checkpointer.aget(
+                        config={"configurable": {"thread_id": session_id}}
+                    )
+                    if checkpoint_data and "execution_state" in checkpoint_data:
+                        previous_execution_state = checkpoint_data["execution_state"]
+                        logger.info(f"🔄 Found previous execution state: {previous_execution_state.get('completed_task_ids', [])}")
+                except Exception as e:
+                    logger.debug(f"No previous execution state: {e}")
+            
             preferences_context = pref_mgr.get_relevant_preferences(
-                str(raw_task.get("confirmation", "")), limit=10
+                str(raw_task.get("confirmation", "")), limit=5  # ✅ REDUCED from 10
             )
         except Exception as e:
             logger.warning(f"⚠️ Could not retrieve preferences: {e}")
             preferences_context = "No user preferences available"
+
+        
+        if previous_execution_state:
+            execution_context = f"\n\n# PREVIOUS EXECUTION STATE\n"
+            execution_context += f"Failed at task: {previous_execution_state.get('failed_task_id')}\n"
+            execution_context += f"Completed tasks: {previous_execution_state.get('completed_task_ids', [])}\n"
+            execution_context += f"User is asking to rety. Continue from where you left off"
+
+            preferences_context = f"{preferences_context}{execution_context}"
+
+        # ✅ NEW: Add retry context if previous execution failed
+    #     if previous_execution_state:
+    #         failed_task_id = previous_execution_state.get('failed_task_id', 'unknown')
+    #         completed_tasks = previous_execution_state.get('completed_task_ids', [])
+            
+    #         retry_context = f"""
+    # # ⚠️ RETRY CONTEXT - PREVIOUS ATTEMPT FAILED
+    # The user previously attempted a similar task but it FAILED.
+
+    # Already completed: {', '.join(completed_tasks) if completed_tasks else 'none'}
+    # Failed at: {failed_task_id}
+
+    # IMPORTANT INSTRUCTIONS:
+    # 1. Skip any tasks that were already completed successfully
+    # 2. If Excel/Chrome/etc was already opened, DON'T open it again
+    # 3. Start from the failed step or retry it with a different approach
+    # 4. User is retrying - be smart about what's already done
+
+    # User's current request: {raw_task.get('confirmation', '')}
+    # """
+    #         preferences_context = f"{preferences_context}\n{retry_context}"
+    #         logger.info("✅ Injected retry context into task decomposition")
+
 
         # Decompose task - pass device_type to the prompt
         plan_result = await decompose_task_to_actions(raw_task, preferences_context, device_type)  # NEW: Pass device_type
@@ -507,9 +591,58 @@ def create_coordinator_graph():
         
         results = {}
         task_outputs = {}  # Store outputs for dependent tasks
+
+        if checkpointer and session_id:
+            try:
+                execution_state={
+                    "completed_task_ids": list(results.keys()),
+                    "failed_task_ids":task_queue.get_failed_index(),
+                    "remaining_tasks": [t.task_id for t in list(task_queue.current_queue)],
+                    "timestamp": datetime.now().isoformat()
+                }
+                await checkpointer.aput(
+                    config={"configurable": {"thread_id": session_id}},
+                    checkpoint={"execution_state": execution_state},
+                    metadata = {"type": "task_progress"}
+                )
+                logger.info(f"💾 Saved task progress: {len(results)} completed")
+            except Exception as e:
+                logger.error(f"❌ Failed to save task progress: {e}") 
         
         while task_queue.has_tasks():
             # Check for stop/pause
+
+            # while task_queue.has_tasks():
+               
+                    # try:
+                    #     execution_state ={
+                    #         "completed_task_ids": list(results.keys()),
+                    #         "failed_task_ids":next(
+                    #             (tid for tid, res in results.items() if res.status == "failed"), None
+                    #         ),
+                    #         "total_tasks": len(tasks),
+                    #         "timestamps": datetime.now().isoformat()
+                    #     }
+                    #     from langgraph.checkpoint.base import Checkpoint
+                    #     checkpoint_to_save = Checkpoint(
+                    #         v=1,
+                    #         id=str(uuid.uuid4()),
+                    #         ts=datetime.now().isoformat(),
+                    #         channel_values={"execution_state": execution_state},
+                    #         channel_veersion={},
+                    #         versions_seen={}
+                    #     )
+
+                    #     await checkpointer.aput(
+                    #         config={"configurable": {"thread_id": session_id}},
+                    #         checkpoint=checkpoint_to_save,
+                    #         metadata = {"type": "task_progress", "session_id": session_id}
+                    #     )
+                    #     logger.info(f"💾 Saved task progress: {len(results)} completed" )
+                    # except Exception as e:
+                    #     logger.warning (f"Could not save execution state:{e}")
+
+             
             if task_queue.is_stopped:
                 logger.warning("⏹️ Execution stopped by user")
                 break
@@ -646,17 +779,17 @@ OUTPUT FORMAT (JSON array):
 If NO preferences, return: []
 
 Extract now:"""
-
+                #here
                 extraction_response = await llm.ainvoke(extraction_prompt)
                 extraction_text = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
-                
+
                 # Clean markdown
                 extraction_text = extraction_text.strip()
                 if extraction_text.startswith("```"):
                     extraction_text = extraction_text.split("```")[1]
                     if extraction_text.startswith("json"):
                         extraction_text = extraction_text[4:]
-                
+
                 preferences_to_store = json.loads(extraction_text.strip())
                 
                 if preferences_to_store and isinstance(preferences_to_store, list):
@@ -771,6 +904,15 @@ async def start_coordinator_agent(broker_instance):
         http_request_id = message.response_to if message.response_to else message.message_id
         user_id = message.payload.get("user_id", "default_user")
         session_id = message.session_id
+
+        # if not session_id or session_id =="None":
+        #     session_id = message.payload.get("session_id")
+        #     logger.warning(f"⚠️ session_id was None, using from payload: {session_id}")
+        
+        # if not session_id:
+        #     logger.error("f❌ No session_id found! Message: {message.dict()}")
+        #     session_id = f"fallback-{http_request_id[:8]}"
+
         
         # NEW: Send thinking update
         await ThinkingStepManager.update_step(session_id, "Formulating plan...", http_request_id)
