@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -13,12 +14,36 @@ import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.*
 
+/**
+ * Core Accessibility Service for YUSR Mobile Automation
+ * 
+ * Capabilities:
+ * - Captures the SYSTEM's currently active app UI (not just Flutter app)
+ * - Parses accessibility tree into JSON
+ * - Sends UI tree to backend every 2 seconds
+ * - Executes real accessibility actions (click, type, scroll, etc.)
+ * - Supports global actions (HOME, BACK, RECENTS)
+ */
+
+// Extension function to get unique ID for node
+private fun AccessibilityNodeInfo.uniqueId(): String {
+    return "${this.viewIdResourceName}_${this.hashCode()}"
+}
 class AutomationService : AccessibilityService() {
 
     companion object {
         var instance: AutomationService? = null
         private const val TAG = "AutomationService"
+        private const val BACKEND_URL = "http://localhost:8000"
+        private const val DEVICE_ID = "android_device_1"
+        private const val UI_SEND_INTERVAL_MS = 2000L
         
         fun isServiceEnabled(context: Context): Boolean {
             val enabledServices = Settings.Secure.getString(
@@ -29,254 +54,391 @@ class AutomationService : AccessibilityService() {
         }
     }
 
+    private var uiBroadcastJob: Job? = null
+    private var lastUiHash: String = ""
+    private var elementCounter = 1
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.d(TAG, "AutomationService connected and instance set")
+        Log.d(TAG, "✅ AutomationService connected")
+        
+        // Start UI tree broadcasting
+        startUIBroadcasting()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Not used for this specific trigger, but required to override
+        if (event == null) return
+        
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                Log.d(TAG, "🔄 Window changed: ${event.packageName}")
+                // UI changed, next broadcast will capture it
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                Log.d(TAG, "🔄 Content changed: ${event.packageName}")
+                // Content updated
+            }
+        }
     }
 
     override fun onInterrupt() {
-        Log.d(TAG, "onInterrupt called")
+        Log.d(TAG, "⚠️ Service interrupted")
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "AutomationService destroyed")
+        Log.d(TAG, "🛑 Service destroyed")
+        stopUIBroadcasting()
         instance = null
     }
 
     /**
-     * Copy text to clipboard and paste it into the focused field
+     * Start broadcasting UI tree to backend
      */
-    private fun setTextViaClipboard(text: String, node: AccessibilityNodeInfo): Boolean {
-        return try {
-            Log.d(TAG, "setTextViaClipboard: Setting text '$text'")
+    private fun startUIBroadcasting() {
+        if (uiBroadcastJob != null) return
+        
+        Log.d(TAG, "📡 Starting UI tree broadcast...")
+        
+        uiBroadcastJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                try {
+                    val rootNode = rootInActiveWindow
+                    if (rootNode != null) {
+                        captureAndSendUITree(rootNode)
+                    }
+                    delay(UI_SEND_INTERVAL_MS)
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error in broadcast: ${e.message}")
+                    delay(5000)
+                }
+            }
+        }
+    }
+
+    /**
+     * Stop UI tree broadcasting
+     */
+    private fun stopUIBroadcasting() {
+        Log.d(TAG, "🛑 Stopping UI broadcast...")
+        uiBroadcastJob?.cancel()
+        uiBroadcastJob = null
+    }
+
+    /**
+     * Capture system UI tree and send to backend
+     */
+    private suspend fun captureAndSendUITree(rootNode: AccessibilityNodeInfo) {
+        try {
+            elementCounter = 1
+            val uiJson = captureAccessibilityTree(rootNode)
+            val uiHash = uiJson.toString().hashCode().toString()
             
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("text", text)
-            clipboard.setPrimaryClip(clip)
-            Log.d(TAG, "Text copied to clipboard")
-            Thread.sleep(300)
+            // Only send if UI changed (reduce spam)
+            if (uiHash == lastUiHash) return
+            lastUiHash = uiHash
             
-            // Try paste action
-            Log.d(TAG, "Attempting paste action")
-            val success = node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-            Log.d(TAG, "Paste action result: $success")
-            Thread.sleep(500)
+            Log.d(TAG, "📤 Sending UI tree...")
+            Log.d(TAG, "   App: ${uiJson.optString("app_name")}")
+            Log.d(TAG, "   Screen: ${uiJson.optString("screen_name")}")
+            Log.d(TAG, "   Elements: ${uiJson.optJSONArray("elements")?.length() ?: 0}")
             
-            success
+            sendToBackend(uiJson)
         } catch (e: Exception) {
-            Log.e(TAG, "Clipboard paste failed: ${e.message}", e)
+            Log.e(TAG, "❌ Error capturing UI: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Recursively capture accessibility tree into JSON
+     */
+    private fun captureAccessibilityTree(node: AccessibilityNodeInfo?): JSONObject {
+        if (node == null) {
+            return JSONObject().apply {
+                put("screen_id", "screen_${System.currentTimeMillis()}")
+                put("device_id", DEVICE_ID)
+                put("app_name", "Unknown")
+                put("screen_name", "Unknown")
+                put("elements", JSONArray())
+                put("timestamp", System.currentTimeMillis())
+                put("screen_width", 1080)
+                put("screen_height", 2340)
+            }
+        }
+        
+        val elements = JSONArray()
+        val visitedIds = mutableSetOf<String>()
+        
+        // Get app package name
+        val appName = node.packageName?.toString() ?: "unknown"
+        val appLabel = getAppLabel(appName)
+        
+        // Traverse tree
+        traverseAndCollect(node, elements, visitedIds)
+        
+        return JSONObject().apply {
+            put("screen_id", "screen_${System.currentTimeMillis()}")
+            put("device_id", DEVICE_ID)
+            put("app_name", appLabel)
+            put("app_package", appName)
+            put("screen_name", getCurrentActivityName())
+            put("elements", elements)
+            put("timestamp", System.currentTimeMillis())
+            put("screen_width", 1080)
+            put("screen_height", 2340)
+        }
+    }
+
+    /**
+     * Recursively traverse accessibility tree
+     */
+    private fun traverseAndCollect(
+        node: AccessibilityNodeInfo,
+        elements: JSONArray,
+        visitedIds: MutableSet<String>
+    ) {
+        // Avoid infinite loops
+        val nodeId = node.uniqueId()
+        if (nodeId in visitedIds) return
+        visitedIds.add(nodeId)
+        
+        // Only include visible, interactive elements
+        if (node.isVisibleToUser && (node.isClickable || node.isEditable || node.isScrollable)) {
+            val element = JSONObject().apply {
+                put("element_id", elementCounter++)
+                put("text", node.text?.toString() ?: "")
+                put("resource_id", node.viewIdResourceName ?: "")
+                put("class", node.className?.toString() ?: "")
+                put("content_description", node.contentDescription?.toString() ?: "")
+                put("clickable", node.isClickable)
+                put("editable", node.isEditable)
+                put("scrollable", node.isScrollable)
+                put("focused", node.isFocused)
+                put("password", node.isPassword)
+            }
+            elements.put(element)
+        }
+        
+        // Recurse to children
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            traverseAndCollect(child, elements, visitedIds)
+        }
+    }
+
+    /**
+     * Send UI tree to backend
+     */
+    private suspend fun sendToBackend(uiJson: JSONObject) {
+        withContext(Dispatchers.IO) {
+            try {
+                val url = URL("$BACKEND_URL/device/$DEVICE_ID/ui-tree")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.setRequestProperty("Accept", "application/json")
+                connection.doOutput = true
+                connection.connectTimeout = 5000
+                connection.readTimeout = 5000
+                
+                val outputStream = connection.outputStream
+                outputStream.write(uiJson.toString().toByteArray(Charsets.UTF_8))
+                outputStream.close()
+                
+                val responseCode = connection.responseCode
+                if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_CREATED) {
+                    Log.w(TAG, "⚠️ Server returned: $responseCode")
+                }
+                connection.disconnect()
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to send UI tree: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Get human-readable app label
+     */
+    private fun getAppLabel(packageName: String): String {
+        return when {
+            packageName.contains("gmail") -> "Gmail"
+            packageName.contains("whatsapp") -> "WhatsApp"
+            packageName.contains("messenger") -> "Messenger"
+            packageName.contains("aura_project") -> "Aura App"
+            packageName.contains("android.launcher") -> "Launcher"
+            else -> packageName.split(".").last()
+        }
+    }
+
+    /**
+     * Get current activity name
+     */
+    private fun getCurrentActivityName(): String {
+        val rootNode = rootInActiveWindow ?: return "Unknown"
+        return rootNode.text?.toString() ?: rootNode.contentDescription?.toString() ?: "Unknown Screen"
+    }
+
+    /**
+     * Execute an action (called by backend)
+     */
+    fun executeAction(
+        actionType: String,
+        elementId: Int?,
+        text: String?,
+        direction: String?,
+        globalAction: String?
+    ): Boolean {
+        return try {
+            when (actionType) {
+                "click" -> performClickById(elementId)
+                "type" -> performTypeText(elementId, text ?: "")
+                "scroll" -> performScroll(direction ?: "down")
+                "global_action" -> performGlobalAction(globalAction ?: "")
+                "navigate_home" -> navigateToHome()
+                "navigate_back" -> navigateBack()
+                "wait" -> { Thread.sleep((text?.toLongOrNull() ?: 1000)); true }
+                else -> false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error executing action: ${e.message}", e)
             false
         }
     }
 
     /**
-     * Main entry point to start the automation
+     * Click element by ID
      */
-    fun performAutomation() {
-        Log.d(TAG, "performAutomation called - this method is executing!")
-        Log.d(TAG, "Starting Gmail automation")
+    private fun performClickById(elementId: Int?): Boolean {
+        if (elementId == null) return false
+        
+        val rootNode = rootInActiveWindow ?: return false
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodesByIndex(rootNode, nodes)
+        
+        if (elementId - 1 < nodes.size) {
+            val node = nodes[elementId - 1]
+            if (node.isClickable) {
+                Log.d(TAG, "👆 Clicking element $elementId")
+                return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+        }
+        
+        return false
+    }
+
+    /**
+     * Type text into element
+     */
+    private fun performTypeText(elementId: Int?, text: String): Boolean {
+        if (elementId == null) return false
+        
+        val rootNode = rootInActiveWindow ?: return false
+        val nodes = mutableListOf<AccessibilityNodeInfo>()
+        collectNodesByIndex(rootNode, nodes)
+        
+        if (elementId - 1 < nodes.size) {
+            val node = nodes[elementId - 1]
+            if (node.isEditable) {
+                Log.d(TAG, "⌨️ Typing into element $elementId: '$text'")
+                
+                // Use clipboard method for reliability
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("text", text)
+                clipboard.setPrimaryClip(clip)
+                
+                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                Thread.sleep(200)
+                return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            }
+        }
+        
+        return false
+    }
+
+    /**
+     * Scroll in direction
+     */
+    private fun performScroll(direction: String): Boolean {
+        val rootNode = rootInActiveWindow ?: return false
+        
+        Log.d(TAG, "📜 Scrolling $direction")
+        
+        val forwardDirection = when (direction.lowercase()) {
+            "down", "right" -> true
+            else -> false
+        }
+        
+        return rootNode.performAction(
+            if (forwardDirection) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        )
+    }
+
+    /**
+     * Navigate to home screen using multiple methods
+     */
+    private fun navigateToHome(): Boolean {
+        Log.d(TAG, "🏠 Navigating to home screen...")
         
         try {
-            // Try multiple possible Gmail package names
-            val possiblePackages = listOf(
-                "com.google.android.gm",
-                "com.google.android.gm.lite",
-                "com.gmail.android"
-            )
+            // Method 1: Use Android Intent to launch home screen
+            val intent = Intent(Intent.ACTION_MAIN)
+            intent.addCategory(Intent.CATEGORY_HOME)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            startActivity(intent)
             
-            var launchIntent: Intent? = null
-            for (packageName in possiblePackages) {
-                launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-                if (launchIntent != null) {
-                    Log.d(TAG, "Found Gmail at: $packageName")
-                    break
-                }
-            }
+            // Method 2: Use system global action as backup
+            Thread.sleep(500)
+            performGlobalAction(GLOBAL_ACTION_HOME)
             
-            Log.d(TAG, "Launch intent: $launchIntent")
-            
-            if (launchIntent != null) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(launchIntent)
-                Log.d(TAG, "Gmail app launched")
-                
-                Handler(Looper.getMainLooper()).postDelayed({
-                    Log.d(TAG, "Calling clickComposeButton after delay")
-                    clickComposeButton(0)
-                }, 3000)
-            } else {
-                Log.e(TAG, "Could not get launch intent for Gmail - all package names failed")
-            }
+            Log.d(TAG, "✅ Successfully navigated to home screen")
+            return true
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in performAutomation: ${e.message}", e)
+            Log.e(TAG, "❌ Error navigating to home: ${e.message}")
+            return false
         }
     }
 
-    private fun clickComposeButton(attempt: Int) {
-        if (attempt > 5) {
-            Log.e(TAG, "Failed to find compose button after 5 attempts")
-            return
-        }
+    /**
+     * Navigate back using system back action
+     */
+    private fun navigateBack(): Boolean {
+        Log.d(TAG, "⬅️ Navigating back...")
         
-        val rootNode = rootInActiveWindow
-        if (rootNode == null) {
-            Log.e(TAG, "Root node is null")
-            Handler(Looper.getMainLooper()).postDelayed({
-                clickComposeButton(attempt + 1)
-            }, 1000)
-            return
-        }
-        
-        Log.d(TAG, "Attempt $attempt: Looking for compose button")
-        
-        val composeButton = findNodeByContentDescription(rootNode, "Compose")
-            ?: findNodeByText(rootNode, "Compose")
-        
-        if (composeButton != null && composeButton.isClickable) {
-            Log.d(TAG, "Found compose button, clicking")
-            composeButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            
-            Handler(Looper.getMainLooper()).postDelayed({
-                fillAllFields(0)
-            }, 2500)
-        } else {
-            Log.d(TAG, "Compose button not found, retrying")
-            Handler(Looper.getMainLooper()).postDelayed({
-                clickComposeButton(attempt + 1)
-            }, 1000)
+        try {
+            // Use system back action
+            return performGlobalAction(GLOBAL_ACTION_BACK)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error navigating back: ${e.message}")
+            return false
         }
     }
 
-    private fun fillAllFields(attempt: Int) {
-        if (attempt > 10) {
-            Log.e(TAG, "Failed to fill fields after 10 attempts")
-            return
+    /**
+     * Perform system action
+     */
+    private fun performGlobalAction(action: String): Boolean {
+        Log.d(TAG, "🏠 Global action: $action")
+        
+        return when (action.uppercase()) {
+            "HOME" -> performGlobalAction(GLOBAL_ACTION_HOME)
+            "BACK" -> performGlobalAction(GLOBAL_ACTION_BACK)
+            "RECENTS" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+            "POWER" -> performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+            else -> false
         }
-        
-        val rootNode = rootInActiveWindow
-        if (rootNode == null) {
-            Log.e(TAG, "Root node is null")
-            return
-        }
-        
-        // Find ALL EditText fields
-        val allEditTexts = mutableListOf<AccessibilityNodeInfo>()
-        collectAllEditTexts(rootNode, allEditTexts)
-        
-        Log.d(TAG, "Attempt $attempt: Found ${allEditTexts.size} EditText fields")
-        
-        if (allEditTexts.size < 3) {
-            // Not all fields loaded yet, retry
-            Log.d(TAG, "Not enough fields yet, waiting...")
-            Handler(Looper.getMainLooper()).postDelayed({
-                fillAllFields(attempt + 1)
-            }, 1500)
-            return
-        }
-        
-        // Gmail compose has 3 EditText fields in order: To, Subject, Body
-        val toField = allEditTexts[0]
-        val subjectField = allEditTexts[1]
-        val bodyField = allEditTexts[2]
-        
-        Log.d(TAG, "All fields found, starting to fill")
-        Log.d(TAG, "To field: ${toField.text}")
-        Log.d(TAG, "Subject field: ${subjectField.text}")
-        Log.d(TAG, "Body field: ${bodyField.text}")
-        
-        Log.d(TAG, "Clicking and focusing To field")
-        toField.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        toField.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        Thread.sleep(400)
-        
-        Handler(Looper.getMainLooper()).postDelayed({
-            val toSuccess = setTextViaClipboard("hayaadawy@icloud.com", toField)
-            Log.d(TAG, "To field result: $toSuccess")
-            
-            Handler(Looper.getMainLooper()).postDelayed({
-                Log.d(TAG, "Clicking and focusing Subject field")
-                subjectField.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                subjectField.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                Thread.sleep(400)
-                
-                Handler(Looper.getMainLooper()).postDelayed({
-                    val subjectSuccess = setTextViaClipboard("testing out this new method", subjectField)
-                    Log.d(TAG, "Subject field result: $subjectSuccess")
-                    
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        Log.d(TAG, "Clicking and focusing Body field")
-                        bodyField.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        bodyField.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                        Thread.sleep(400)
-                        
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            val bodySuccess = setTextViaClipboard("hello! this is just a test from the agent! thank you", bodyField)
-                            Log.d(TAG, "Body field result: $bodySuccess")
-                            
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                sendEmail()
-                            }, 1500)
-                        }, 600)
-                    }, 1200)
-                }, 600)
-            }, 1200)
-        }, 600)
     }
 
-    private fun collectAllEditTexts(node: AccessibilityNodeInfo, list: MutableList<AccessibilityNodeInfo>) {
-        if (node.className?.contains("EditText") == true) {
+    /**
+     * Collect nodes by index for easy access
+     */
+    private fun collectNodesByIndex(node: AccessibilityNodeInfo?, list: MutableList<AccessibilityNodeInfo>) {
+        if (node == null) return
+        if (node.isVisibleToUser && (node.isClickable || node.isEditable)) {
             list.add(node)
         }
         for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            collectAllEditTexts(child, list)
+            collectNodesByIndex(node.getChild(i), list)
         }
-    }
-
-    private fun sendEmail() {
-        val rootNode = rootInActiveWindow
-        if (rootNode == null) {
-            Log.e(TAG, "Root node is null when trying to send")
-            return
-        }
-        
-        Log.d(TAG, "Looking for Send button")
-        
-        val sendButton = findNodeByContentDescription(rootNode, "Send")
-            ?: findNodeByText(rootNode, "Send")
-        
-        if (sendButton != null && sendButton.isClickable) {
-            Log.d(TAG, "Found Send button, clicking")
-            sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            Log.d(TAG, "Email sent!")
-        } else {
-            Log.e(TAG, "Send button not found")
-        }
-    }
-
-    // --- Helper Search Methods ---
-
-    private fun findNodeByText(node: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
-        if (node.text?.toString()?.contains(text, ignoreCase = true) == true) return node
-        for (i in 0 until node.childCount) {
-            val result = findNodeByText(node.getChild(i) ?: continue, text)
-            if (result != null) return result
-        }
-        return null
-    }
-
-    private fun findNodeByContentDescription(node: AccessibilityNodeInfo, desc: String): AccessibilityNodeInfo? {
-        if (node.contentDescription?.toString()?.contains(desc, ignoreCase = true) == true) return node
-        for (i in 0 until node.childCount) {
-            val result = findNodeByContentDescription(node.getChild(i) ?: continue, desc)
-            if (result != null) return result
-        }
-        return null
     }
 }

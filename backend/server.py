@@ -25,9 +25,19 @@ from agents.utils.protocol import (
     ClarificationMessage
 )
 from ThinkingStepManager import ThinkingStepManager
+from routes.device_routes import router as device_router
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
+
+# Debug: Check which .env file was loaded and what keys are set
+logger_debug = logging.getLogger("server_init")
+groq_key = os.getenv("GROQ_API_KEY")
+if groq_key:
+    logger_debug.info(f"🔑 GROQ_API_KEY loaded: {groq_key[:20]}...{groq_key[-10:]}")
+else:
+    logger_debug.error("❌ GROQ_API_KEY NOT found in environment!")
 
 # Configure logging
 logging.basicConfig(
@@ -102,6 +112,9 @@ app = FastAPI(
     version="3.0.0",
     lifespan=lifespan
 )
+
+# Include device routes
+app.include_router(device_router)
 
 # CORS for Electron
 app.add_middleware(
@@ -328,7 +341,7 @@ async def process_user_input(request: Request):
         session_id = data.get("session_id", "default")
         user_input = data.get("input", "").strip()
         is_clarification = data.get("is_clarification", False)
-        device_type = data.get("device_type", "desktop")
+        device_type = data.get("device_type", "mobile")
         
         if not user_input:
             raise HTTPException(status_code=400, detail="Missing 'input' field")

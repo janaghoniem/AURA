@@ -147,30 +147,69 @@ class MainActivity: FlutterActivity(), TextToSpeech.OnInitListener {
                         stopAudioRecording(result)
                     }
                 }
-                "startAutomation" -> {
-                    Log.d(TAG, "startAutomation called")
-                    val isEnabled = AutomationService.isServiceEnabled(this)
-                    Log.d(TAG, "Service enabled: $isEnabled")
-                    Log.d(TAG, "Service instance: ${AutomationService.instance}")
-                    
-                    if (isEnabled) {
-                        if (AutomationService.instance != null) {
-                            Log.d(TAG, "Calling performAutomation")
-                            AutomationService.instance?.performAutomation()
-                            result.success("Automation started")
-                        } else {
-                            Log.e(TAG, "Service instance is null")
-                            result.error("SERVICE_NOT_RUNNING", "Accessibility service is enabled but not running. Please restart the app or re-enable the service.", null)
-                        }
-                    } else {
-                        Log.e(TAG, "Service not enabled")
-                        result.error("SERVICE_DISABLED", "Accessibility service not enabled", null)
+                "receiveBroadcast" -> {
+                    Log.d(TAG, "receiveBroadcast called - setting up broadcast listener")
+                    // The app is ready to receive broadcasts
+                    // This is a signal that the HTTP server is ready to handle requests
+                    result.success("Broadcast receiver registered")
+                }
+                "goToHome" -> {
+                    Log.d(TAG, "🏠 goToHome called - sending app to background")
+                    try {
+                        goToHome()
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error going to home: ${e.message}")
+                        result.error("HOME_ERROR", e.message, null)
+                    }
+                }
+                "click" -> {
+                    val elementId = call.argument<Int>("element_id")
+                    Log.d(TAG, "👆 click called for element: $elementId")
+                    try {
+                        performClick(elementId ?: 0)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error performing click: ${e.message}")
+                        result.error("CLICK_ERROR", e.message, null)
                     }
                 }
                 else -> result.notImplemented()
             }
         }
     }
+    
+    /**
+     * Perform click on app icon from home screen
+     * Maps element_id to app package and launches it
+     */
+    private fun performClick(elementId: Int) {
+        Log.d(TAG, "👆 performClick for element: $elementId")
+        
+        val packageName = when (elementId) {
+            100 -> "com.google.android.gm" // Gmail
+            101 -> "com.android.chrome" // Chrome
+            102 -> "com.android.settings" // Settings
+            else -> {
+                Log.w(TAG, "⚠️  Unknown element ID: $elementId")
+                return
+            }
+        }
+        
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+            if (intent != null) {
+                Log.d(TAG, "🚀 Launching app: $packageName")
+                startActivity(intent)
+                Log.d(TAG, "✅ App launched successfully: $packageName")
+            } else {
+                Log.w(TAG, "⚠️  App not found: $packageName")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error launching app: ${e.message}")
+        }
+    }
+
     
     /**
      * Send text to backend coordinator agent
@@ -565,5 +604,17 @@ class MainActivity: FlutterActivity(), TextToSpeech.OnInitListener {
             Log.e(TAG, "❌ Error during TTS: ${e.message}")
             Log.e(TAG, "Stack trace:\n${Log.getStackTraceString(e)}")
         }
+    }
+
+    /**
+     * Send app to background by opening home screen
+     */
+    private fun goToHome() {
+        Log.d(TAG, "🏠 goToHome: Creating HOME intent")
+        val intent = Intent(Intent.ACTION_MAIN)
+        intent.addCategory(Intent.CATEGORY_HOME)
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        startActivity(intent)
+        Log.d(TAG, "✅ goToHome: Home intent sent successfully")
     }
 }
