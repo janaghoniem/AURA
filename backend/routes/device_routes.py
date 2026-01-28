@@ -1,34 +1,16 @@
 """
-Device Routes
-Endpoints for mobile device communication and UI automation
-
-Handles:
-- UI tree retrieval (GET /device/{device_id}/ui-tree)
-- Action execution (POST /device/{device_id}/action)
-- Device status (GET /device/{device_id}/status)
-- Device list (GET /devices)
-
-Android sends requests to these endpoints for:
-- Sending current UI tree to backend
-- Receiving actions to execute
-- Reporting action results
-
-Backend sends requests to:
-- Get UI tree from Android device HTTP server
-- Send actions to Android device
+FIXED Device Routes - Properly converts global_action to navigate_home/navigate_back
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Path, Body
+from fastapi import APIRouter, HTTPException, Path, Body
 from typing import Dict, Any, Optional, List
 import logging
-import httpx
-import time
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/device", tags=["device"])
 
-# In-memory device registry (replace with database in production)
+# Device registry
 DEVICE_REGISTRY: Dict[str, Dict[str, Any]] = {
     "default_device": {
         "device_id": "default_device",
@@ -43,46 +25,29 @@ DEVICE_REGISTRY: Dict[str, Dict[str, Any]] = {
     }
 }
 
+# Pending actions and results
+PENDING_ACTIONS: Dict[str, List[Dict[str, Any]]] = {}
+ACTION_RESULTS: Dict[str, List[Dict[str, Any]]] = {}
 
-# ============================================================================
-# UI TREE ENDPOINTS
-# ============================================================================
 
 @router.get("/{device_id}/ui-tree")
-async def get_ui_tree(device_id: str = Path(..., description="Device ID")):
-    """
-    Get current UI tree from device
-    
-    This endpoint is called by the backend to get the current screen state
-    from the Android device. The Android device runs an HTTP server that
-    exposes this endpoint.
-    
-    In production, this would proxy to the actual Android device:
-    http://{device_ip}:8080/ui-tree
-    """
+async def get_ui_tree(device_id: str = Path(...)):
+    """Get current UI tree from device"""
     logger.info(f"📱 Getting UI tree from device: {device_id}")
     
     if device_id not in DEVICE_REGISTRY:
         logger.error(f"❌ Device not found: {device_id}")
-        raise HTTPException(
-            status_code=404,
-            detail=f"Device {device_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
     
     device = DEVICE_REGISTRY[device_id]
     
     if device["status"] == "offline":
         logger.warning(f"⚠️ Device is offline: {device_id}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Device {device_id} is offline. Make sure the Android device is connected and the HTTP server is running."
-        )
+        raise HTTPException(status_code=503, detail=f"Device {device_id} is offline")
     
-    # Return cached UI tree or empty tree
     if device.get("ui_tree"):
         return device["ui_tree"]
     
-    # Default empty tree response
     return {
         "screen_id": f"screen_{device_id}",
         "device_id": device_id,
@@ -98,28 +63,13 @@ async def get_ui_tree(device_id: str = Path(..., description="Device ID")):
 
 @router.post("/{device_id}/ui-tree")
 async def update_ui_tree(
-    device_id: str = Path(..., description="Device ID"),
+    device_id: str = Path(...),
     tree_data: Dict[str, Any] = None
 ):
-    """
-    Update UI tree from device
-    
-    This endpoint is called by the Android device to push the current UI tree
-    to the backend. The Android HTTP server (running on device) calls this.
-    
-    Example Android call:
-    POST http://{backend_ip}:8000/device/{device_id}/ui-tree
-    {
-        "screen_id": "screen_123",
-        "device_id": "device_abc",
-        "app_name": "Gmail",
-        "elements": [...]
-    }
-    """
+    """Update UI tree from device"""
     logger.info(f"📥 Received UI tree update from device: {device_id}")
     
     if device_id not in DEVICE_REGISTRY:
-        # Auto-register new devices
         DEVICE_REGISTRY[device_id] = {
             "device_id": device_id,
             "name": f"Device {device_id}",
@@ -138,153 +88,15 @@ async def update_ui_tree(
             device["screen_width"] = tree_data.get("screen_width", 1080)
             device["screen_height"] = tree_data.get("screen_height", 2340)
     
-    return {
-        "status": "ok",
-        "message": f"UI tree updated for {device_id}"
-    }
-
-
-# ============================================================================
-# ACTION ENDPOINTS
-# ============================================================================
-
-@router.post("/{device_id}/action")
-async def execute_action(
-    device_id: str = Path(..., description="Device ID"),
-    action_data: Dict[str, Any] = Body(..., description="Action to execute")
-):
-    """
-    Execute action on device
-    
-    Forwards the action to the Android device's HTTP server at port 9999.
-    
-    Example:
-    POST http://{backend_ip}:8000/device/{device_id}/action
-    {
-        "action_type": "click",
-        "element_id": 1,
-        "action_id": "action_123"
-    }
-    """
-    logger.info(f"⚡ Executing action on device: {device_id}")
-    logger.info(f"   Action: {action_data}")
-    
-    if device_id not in DEVICE_REGISTRY:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Device {device_id} not found"
-        )
-    
-    device = DEVICE_REGISTRY[device_id]
-    
-    if device["status"] == "offline":
-        logger.warning(f"⚠️ Device {device_id} is offline, cannot execute action")
-        return {
-            "action_id": action_data.get("action_id") if action_data else "unknown",
-            "success": False,
-            "error": "Device is offline",
-            "execution_time_ms": 0
-        }
-    
-    # Forward to Android device HTTP server (localhost:9999 for emulator)
-    # In production, would be the device's actual IP
-    try:
-        import httpx
-        
-        # For emulator: Android device runs on localhost:9999
-        # For physical device: would need IP configuration
-        android_url = "http://localhost:9999/action"
-        
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                android_url,
-                json=action_data,
-                headers={"Content-Type": "application/json"}
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"✅ Action executed successfully on device")
-                return result
-            else:
-                logger.error(f"❌ Device returned error: {response.status_code}")
-                return {
-                    "action_id": action_data.get("action_id") if action_data else "unknown",
-                    "success": False,
-                    "error": f"Device error: {response.status_code}",
-                    "execution_time_ms": 0
-                }
-    except Exception as e:
-        logger.warning(f"⚠️ Could not forward to Android device: {e}")
-        logger.info(f"   Device may be running on different host/port")
-        
-        # Return success=false to indicate action wasn't executed
-        return {
-            "action_id": action_data.get("action_id") if action_data else "unknown",
-            "success": False,
-            "error": f"Cannot reach device: {str(e)}",
-            "execution_time_ms": 0
-        }
-
-
-@router.post("/{device_id}/execute")
-async def execute_action_alias(
-    device_id: str = Path(..., description="Device ID"),
-    action_data: Dict[str, Any] = Body(..., description="Action to execute")
-):
-    """Alias for /action endpoint (for backward compatibility)"""
-    return await execute_action(device_id, action_data)
-
-
-# ============================================================================
-# DEVICE STATUS ENDPOINTS
-# ============================================================================
-
-@router.get("/{device_id}/status")
-async def get_device_status(device_id: str = Path(..., description="Device ID")):
-    """Get device status and metadata"""
-    logger.info(f"📊 Getting status for device: {device_id}")
-    
-    if device_id not in DEVICE_REGISTRY:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Device {device_id} not found"
-        )
-    
-    device = DEVICE_REGISTRY[device_id]
-    
-    return {
-        "device_id": device["device_id"],
-        "name": device["name"],
-        "status": device["status"],
-        "last_seen": device["last_seen"],
-        "screen_width": device.get("screen_width"),
-        "screen_height": device.get("screen_height"),
-        "android_version": device.get("android_version"),
-        "app_name": device.get("app_name")
-    }
+    return {"status": "ok", "message": f"UI tree updated for {device_id}"}
 
 
 @router.post("/{device_id}/status")
 async def update_device_status(
-    device_id: str = Path(..., description="Device ID"),
+    device_id: str = Path(...),
     status_data: Dict[str, Any] = None
 ):
-    """
-    Update device status
-    
-    Called by Android device to report its status
-    
-    Example:
-    POST http://{backend_ip}:8000/device/{device_id}/status
-    {
-        "status": "online",
-        "android_version": "14",
-        "app_name": "com.google.android.gm",
-        "screen_width": 1080,
-        "screen_height": 2340
-    }
-    """
+    """Update device status"""
     logger.info(f"📝 Updating status for device: {device_id}")
     
     if device_id not in DEVICE_REGISTRY:
@@ -298,7 +110,7 @@ async def update_device_status(
         }
     
     device = DEVICE_REGISTRY[device_id]
-    device["status"] = "online"  # Always mark as online when status is sent
+    device["status"] = "online"
     
     if status_data:
         device["android_version"] = status_data.get("android_version")
@@ -306,19 +118,136 @@ async def update_device_status(
         device["screen_width"] = status_data.get("screen_width", 1080)
         device["screen_height"] = status_data.get("screen_height", 2340)
     
+    return {"status": "ok", "message": f"Status updated for {device_id}"}
+
+
+@router.get("/{device_id}/pending-actions")
+async def get_pending_actions(device_id: str = Path(...)):
+    """Get pending actions for device (polling endpoint)"""
+    logger.info(f"📥 Android polling for actions: {device_id}")
+    
+    if device_id not in PENDING_ACTIONS:
+        PENDING_ACTIONS[device_id] = []
+    
+    actions = PENDING_ACTIONS[device_id]
+    
+    if actions:
+        logger.info(f"   📤 Returning {len(actions)} pending actions")
+    
+    response = {
+        "actions": actions,
+        "count": len(actions)
+    }
+    
+    # Clear after returning
+    PENDING_ACTIONS[device_id] = []
+    
+    return response
+
+
+@router.post("/{device_id}/execute-action")
+async def execute_action_on_device(
+    device_id: str = Path(...),
+    action_data: Dict[str, Any] = Body(...)
+):
+    """
+    FIXED: Execute action on device with proper global_action conversion
+    
+    Converts:
+    - global_action: HOME → navigate_home
+    - global_action: BACK → navigate_back
+    """
+    action_type = action_data.get("action_type")
+    logger.info(f"⚡ Queueing action for device: {device_id}")
+    logger.info(f"   Action: {action_type}")
+    
+    if device_id not in DEVICE_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
+    
+    device = DEVICE_REGISTRY[device_id]
+    
+    if device["status"] == "offline":
+        logger.warning(f"⚠️ Device {device_id} is offline")
+        return {
+            "action_id": action_data.get("action_id", "unknown"),
+            "success": False,
+            "error": "Device is offline",
+            "execution_time_ms": 0
+        }
+    
+    # CRITICAL FIX: Convert global_action to proper action types
+    if action_type == "global_action":
+        global_action = action_data.get("global_action", "").upper()
+        logger.info(f"🔄 Converting global_action: {global_action}")
+        
+        if global_action == "HOME":
+            # Convert to navigate_home
+            action_data["action_type"] = "navigate_home"
+            logger.info(f"   ✅ Converted to navigate_home")
+        elif global_action == "BACK":
+            # Convert to navigate_back
+            action_data["action_type"] = "navigate_back"
+            logger.info(f"   ✅ Converted to navigate_back")
+        else:
+            logger.warning(f"   ⚠️ Unknown global action: {global_action}")
+            # Keep as global_action
+    
+    # Queue the action
+    if device_id not in PENDING_ACTIONS:
+        PENDING_ACTIONS[device_id] = []
+    
+    PENDING_ACTIONS[device_id].append(action_data)
+    logger.info(f"✅ Action queued for polling: {action_data.get('action_type')}")
+    
+    # Return immediate success
     return {
-        "status": "ok",
-        "message": f"Status updated for {device_id}"
+        "action_id": action_data.get("action_id", "unknown"),
+        "success": True,
+        "error": None,
+        "execution_time_ms": 0
     }
 
 
-# ============================================================================
-# DEVICE LIST ENDPOINT
-# ============================================================================
+@router.post("/{device_id}/register")
+async def register_device_post(
+    device_id: str = Path(...),
+    device_data: Dict[str, Any] = None
+):
+    """Register device"""
+    logger.info(f"✅ Registering device via POST: {device_id}")
+    
+    if device_id not in DEVICE_REGISTRY:
+        DEVICE_REGISTRY[device_id] = {
+            "device_id": device_id,
+            "name": device_data.get("name", f"Device {device_id}") if device_data else f"Device {device_id}",
+            "status": "online",
+            "last_seen": None,
+            "screen_width": 1080,
+            "screen_height": 2340
+        }
+    
+    device = DEVICE_REGISTRY[device_id]
+    device["status"] = "online"
+    
+    if device_data:
+        device["name"] = device_data.get("name", device["name"])
+        device["android_version"] = device_data.get("android_version")
+        device["device_model"] = device_data.get("device_model")
+        device["screen_width"] = device_data.get("screen_width", 1080)
+        device["screen_height"] = device_data.get("screen_height", 2340)
+    
+    logger.info(f"✅ Device {device_id} is now ONLINE")
+    
+    return {
+        "status": "ok",
+        "message": f"Device {device_id} registered and online",
+        "device_info": device
+    }
+
 
 @router.get("")
 async def list_devices():
-    """List all registered devices"""
+    """List all devices"""
     logger.info(f"📋 Listing {len(DEVICE_REGISTRY)} registered devices")
     
     return {
