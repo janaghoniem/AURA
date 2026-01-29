@@ -157,6 +157,12 @@ class ExecutionAgent:
                     status=result.status,
                     details=asdict(result)
                 )
+                if result.status == ActionStatus.SUCESS.value:
+                    if hasattr(result,'metadata') and result.metadata:
+                        if result.metadata.get('detection_method') == 'omniparser':
+                            self.logger.warning(f"⚠️ SUCCESS via OmniParser fallback!")
+                    
+                    self.logger.info(f"✅ Task completed successfully")
                 
                 if result.status == ActionStatus.SUCCESS.value:
                     self.logger.info(f"Task completed successfully: {task.action_type}")

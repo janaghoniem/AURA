@@ -124,8 +124,8 @@ class TaskQueue:
     def log_execution(self, task: ActionTask, result: TaskResult):
         """Log task execution for undo capability"""
         self.execution_history.append({
-            "task": task.dict(),
-            "result": result.dict(),
+            "task": task.model_dump(),
+            "result": result.model_dump(),
             "timestamp": datetime.now().isoformat()
         })
         
@@ -501,12 +501,13 @@ def create_coordinator_graph():
         #         logger.debug(traceback.format_exc())
 
         # Retrieve user preferences
+        # ✅ FIX: Initialize previous_execution_state before try block to avoid UnboundLocalError
+        previous_execution_state = None
         try:
             from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
             pref_mgr = get_preference_manager(user_id)
             
-            # ✅ FIX: Check for previous failed task state
-            previous_execution_state = None
+            # Check for previous failed task state
             if checkpointer and session_id:
                 try:
                     checkpoint_data = await checkpointer.aget(
@@ -737,7 +738,7 @@ def create_coordinator_graph():
                 "response": response_text,
                 "result": {
                     "completed_tasks": {k: v.status for k, v in results.items()},
-                    "details": [v.dict() for v in results.values()]
+                    "details": [v.model_dump() for v in results.values()]
                 }
             }
         )
@@ -849,7 +850,52 @@ async def execute_single_task(
     session_id: str,
     original_message_id: str
 ) -> TaskResult:
-    """Execute a single task via action/reasoning layer"""
+    """Execute a single task via action/reasoning layer or mobile strategy"""
+    
+    # ════════════════════════════════════════════════════════════════
+    # MOBILE TASK ROUTING (NEW)
+    # ════════════════════════════════════════════════════════════════
+    if task.device == "mobile" and task.target_agent == "action":
+        # Route to mobile strategy directly (skip broker)
+        logger.info(f"📱 Mobile task detected: {task.task_id}")
+        try:
+            from agents.execution_agent.handlers.mobile_action_handler import (
+                initialize_mobile_handler, get_mobile_handler
+            )
+            
+            # Get device_id - use android_device_1 by default for Flutter apps
+            device_id = task.extra_params.get("device_id", "android_device_1")
+            
+            logger.info(f"📱 Using device: {device_id}")
+            
+            # Initialize if needed
+            initialize_mobile_handler(device_id=device_id)
+            handler = await get_mobile_handler()
+            
+            # Execute directly
+            result = await handler.handle_action_task(
+                task_data=task.model_dump(),
+                task_id=task.task_id,
+                session_id=session_id
+            )
+            
+            return TaskResult(
+                task_id=task.task_id,
+                status=result.status,
+                content=result.details,
+                error=result.error
+            )
+        except Exception as e:
+            logger.error(f"❌ Mobile task execution failed: {e}", exc_info=True)
+            return TaskResult(
+                task_id=task.task_id,
+                status="failed",
+                error=f"Mobile execution error: {str(e)}"
+            )
+    
+    # ════════════════════════════════════════════════════════════════
+    # DESKTOP TASK ROUTING (ORIGINAL)
+    # ════════════════════════════════════════════════════════════════
     
     # Route to appropriate agent
     if task.target_agent == "action":
@@ -867,7 +913,7 @@ async def execute_single_task(
         session_id=session_id,
         task_id=task.task_id,
         response_to=original_message_id,
-        payload=task.dict()
+        payload=task.model_dump()  # ← Also fix deprecated .dict() to .model_dump()
     )
     
     # Create future for response

@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 # Task Models (matching coordinator_agent.py)
 # ============================================================================
 
+# ============================================================================
+# TESTING FLAGS
+# ============================================================================
+FORCE_OMNIPARSER_TEST = False  # 🧪 Enable OmniParser testing
+OMNIPARSER_TEST_KEYWORDS = []  # Only force on these tasks
+
 class ActionTask:
     """Task format from coordinator agent"""
     def __init__(
@@ -150,11 +156,253 @@ class CoordinatorRAGBridge:
         self.rag = rag_system
         self.sandbox = sandbox_pipeline
         self.adapter = RAGTaskAdapter()
-    
+        self.omniparser = None
+
+
+    #added by shahd for omniparser
+    def _detect_element_coordinates(self, element_description: str) -> Optional[tuple]:
+        """
+        Use OmniParser to detect UI element coordinates
+        IMPROVED: Captures only the active window, not entire desktop
+        """
+        try:
+            if self.omniparser is None:
+                logger.info("🔄 Initializing OmniParser detector...")
+                from agents.execution_agent.fallback.omniparser_detector import OmniParserDetector
+                import logging
+                omni_logger = logging.getLogger("OmniParser")
+                self.omniparser = OmniParserDetector(omni_logger)
+                logger.info("✅ OmniParser ready")
+            
+            # ====================================================================
+            # NEW: Capture only the active window
+            # ====================================================================
+            import pygetwindow as gw
+            import time
+            
+            # Get active window
+            active_window = gw.getActiveWindow()
+            
+            if active_window:
+                logger.info(f"🪟 Active window: '{active_window.title}'")
+                logger.info(f"   Position: ({active_window.left}, {active_window.top})")
+                logger.info(f"   Size: {active_window.width}x{active_window.height}")
+                
+                # Bring window to front just in case
+                try:
+                    active_window.activate()
+                    time.sleep(0.3)
+                except:
+                    pass
+                
+                # Take screenshot of just this window's region
+                import pyautogui
+                screenshot = pyautogui.screenshot(region=(
+                    active_window.left,
+                    active_window.top,
+                    active_window.width,
+                    active_window.height
+                ))
+                
+                # Save temporarily for debugging
+                import tempfile
+                import os
+                temp_path = os.path.join(tempfile.gettempdir(), "omniparser_window.png")
+                screenshot.save(temp_path)
+                logger.info(f"💾 Saved window screenshot to: {temp_path}")
+                
+                # Use OmniParser on this window-only screenshot
+                logger.info(f"🔍 Using OmniParser to find: '{element_description}'")
+                result = self.omniparser.detect_element_by_text(
+                    element_description,
+                    screenshot_path=temp_path
+                )
+                
+                # Adjust coordinates to screen space (add window offset)
+                if result.success and result.coordinates:
+                    screen_x = result.coordinates[0] + active_window.left
+                    screen_y = result.coordinates[1] + active_window.top
+                    adjusted_coords = (screen_x, screen_y)
+                    
+                    logger.info(f"✅ Found at window coords: {result.coordinates}")
+                    logger.info(f"✅ Adjusted to screen coords: {adjusted_coords}")
+                    
+                    return adjusted_coords
+                else:
+                    logger.warning(f"❌ OmniParser couldn't find: '{element_description}'")
+                    return None
+            
+            else:
+                logger.warning("⚠️ No active window detected, falling back to full screen")
+                # Fallback to full screen
+                logger.info(f"🔍 Using OmniParser to find: '{element_description}'")
+                result = self.omniparser.detect_element_by_text(element_description)
+                
+                if result.success and result.coordinates:
+                    logger.info(f"✅ Found at coordinates: {result.coordinates}")
+                    return result.coordinates
+                else:
+                    logger.warning(f"❌ OmniParser couldn't find: '{element_description}'")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"❌ OmniParser detection error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    # ADD this ENTIRE NEW METHOD:
+
+    def _extract_element_description(self, task: ActionTask, error_msg: str) -> Optional[str]:
+        """
+        Extract what UI element to look for based on task and error
+        """
+        prompt = task.ai_prompt.lower()
+        
+        # Skip OmniParser for app launch tasks
+        app_launch_keywords = ['open', 'launch', 'start', 'run']
+        is_app_launch = any(keyword in prompt.split()[:2] for keyword in app_launch_keywords)
+        
+        if is_app_launch:
+            logger.info(f"⏭️ Skipping OmniParser - this is an app launch task")
+            return None
+        
+        # ========================================================================
+        # IMPROVED: Extract just the element name, not the full phrase
+        # ========================================================================
+        import re
+        
+        # Pattern 1: "click on X" → extract X
+        # Example: "click on Gaming" → "Gaming"
+        pattern1 = r'click\s+(?:on\s+)?(?:the\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)'
+        match = re.search(pattern1, task.ai_prompt)  # Use original case!
+        if match:
+            element_text = match.group(1).strip()
+            logger.info(f"📝 Extracted element name: '{element_text}'")
+            return element_text
+        
+        # Pattern 2: "click the X button/icon" → extract X
+        # Example: "click the Submit button" → "Submit"
+        pattern2 = r'click\s+(?:the\s+)?([A-Z][a-z]+)(?:\s+button|\s+icon)'
+        match = re.search(pattern2, task.ai_prompt)
+        if match:
+            element_text = match.group(1).strip()
+            logger.info(f"📝 Extracted button/icon name: '{element_text}'")
+            return element_text
+        
+        # Pattern 3: Fallback - look for capitalized words (likely UI element names)
+        # Example: "Gaming in Microsoft Store" → "Gaming"
+        capital_words = re.findall(r'\b[A-Z][a-z]+\b', task.ai_prompt)
+        if capital_words:
+            # Filter out common words
+            stopwords = {'Click', 'Open', 'The', 'In', 'Microsoft', 'Store', 'Discord', 'On'}
+            filtered = [w for w in capital_words if w not in stopwords]
+            if filtered:
+                element_text = filtered[0]  # Take first meaningful word
+                logger.info(f"📝 Extracted from capitalized words: '{element_text}'")
+                return element_text
+        
+        # If nothing found, skip OmniParser
+        logger.warning(f"⚠️ Could not extract specific UI element - skipping OmniParser")
+        return None
+
+# ============================================================================
+# CORRECTED _regenerate_code_with_coordinates - code_execution.py
+# Replace lines 312-388
+# ============================================================================
+
+    def _regenerate_code_with_coordinates(self,
+                                                task: ActionTask, 
+                                                coordinates: tuple,
+                                                element_description: str) -> str:
+            """
+            Generate code that clicks specific coordinates found by OmniParser
+            FIXED: Uses textwrap.dedent to remove leading whitespace
+            
+            Args:
+                task: Original task
+                coordinates: (x, y) from OmniParser
+                element_description: What was detected
+            
+            Returns:
+                Python code string
+            """
+            import textwrap  # ← ADD THIS!
+            x, y = coordinates
+            
+            # Determine action type
+            action = "click"
+            if 'double' in task.ai_prompt.lower():
+                action = "double_click"
+            elif 'type' in task.ai_prompt.lower() or 'enter' in task.ai_prompt.lower():
+                action = "click_then_type"
+            
+            # Generate code based on action
+            if action == "click":
+                code = textwrap.dedent(f"""
+                    import pyautogui
+                    import time
+
+                    try:
+                        # OmniParser detected '{element_description}' at ({x}, {y})
+                        pyautogui.click(x={x}, y={y})
+                        time.sleep(0.5)
+                        print("EXECUTION_SUCCESS: Clicked {element_description}")
+                    except Exception as e:
+                        print(f"FAILED: {{str(e)}}")
+                """).strip()  # ← .strip() removes leading/trailing whitespace
+            
+            elif action == "double_click":
+                code = textwrap.dedent(f"""
+                    import pyautogui
+                    import time
+
+                    try:
+                        # OmniParser detected '{element_description}' at ({x}, {y})
+                        pyautogui.doubleClick(x={x}, y={y})
+                        time.sleep(0.5)
+                        print("EXECUTION_SUCCESS: Double-clicked {element_description}")
+                    except Exception as e:
+                        print(f"FAILED: {{str(e)}}")
+                """).strip()
+            
+            elif action == "click_then_type":
+                text_to_type = task.extra_params.get('text_to_type', '')
+                code = textwrap.dedent(f"""
+                    import pyautogui
+                    import time
+
+                    try:
+                        # OmniParser detected '{element_description}' at ({x}, {y})
+                        pyautogui.click(x={x}, y={y})
+                        time.sleep(0.3)
+                        pyautogui.write('{text_to_type}', interval=0.05)
+                        time.sleep(0.2)
+                        print("EXECUTION_SUCCESS: Typed into {element_description}")
+                    except Exception as e:
+                        print(f"FAILED: {{str(e)}}")
+                """).strip()
+            else:
+                # Fallback to simple click
+                code = textwrap.dedent(f"""
+                    import pyautogui
+                    import time
+
+                    try:
+                        pyautogui.click(x={x}, y={y})
+                        time.sleep(0.5)
+                        print("EXECUTION_SUCCESS")
+                    except Exception as e:
+                        print(f"FAILED: {{str(e)}}")
+                """).strip()
+            
+            return code
+
+
     async def execute_action_task(
         self,
         task: ActionTask,
-        max_retries: int = 2,
+        max_retries: int = 1,
         enable_cache: bool = False  # Disable cache by default to avoid errors
     ) -> TaskResult:
         """Execute a single ActionTask using RAG pipeline"""
@@ -173,13 +421,13 @@ class CoordinatorRAGBridge:
         attempt = 0
         error_context = ""
         start_context_index = 0
-        
+        #here
+        # ENHANCED VERSION:
         while attempt < max_retries:
             attempt += 1
             logger.info(f"📍 Attempt {attempt}/{max_retries} for task {task.task_id}")
             
             enhanced_query = rag_query
-            # enhanced_query = 'start notepad application and type hello habiba'
         
             if error_context:
                 enhanced_query += f"\n\nPrevious attempt failed: {error_context}"
@@ -197,11 +445,6 @@ class CoordinatorRAGBridge:
                 
                 if not generated_code:
                     logger.warning(f"⚠️ No code generated for task {task.task_id}")
-                    
-                    # if rag_result.get('contexts_used', 0) == 0:
-                    #     logger.error("❌ No more contexts available")
-                    #     break
-                    
                     start_context_index += self.rag.config.top_k
                     continue
                 
@@ -210,7 +453,7 @@ class CoordinatorRAGBridge:
                 # Execute in LOCAL sandbox (not Docker)
                 exec_result = self.sandbox.execute_code(
                     code=generated_code,
-                    use_docker=False,  # ALWAYS use local sandbox
+                    use_docker=False,
                     retry_on_failure=False
                 )
                 
@@ -224,18 +467,257 @@ class CoordinatorRAGBridge:
                 if exec_result.stderr:
                     error_context += f" | stderr: {exec_result.stderr[:200]}"
                 
+                # 🆕 NEW: Try OmniParser detection if error suggests element not found
+                # ========================================================================
+                # NEW: Try OmniParser detection if error suggests element not found
+                # ========================================================================
+                if any(keyword in error_context.lower() for keyword in 
+                    [
+                        'not found', 'cannot find', 'no such element', 'failed to locate',
+                        'modulenotfounderror', 'importerror',
+                        'pywinauto', 'uiautomation',
+                        'element', 'button', 'window',
+                        'failed:', 'error:',
+                        'locateonscreen'
+                    ]):
+
+                    logger.info(f"🔍 OmniParser trigger check:")
+                    logger.info(f"   Error context: {error_context[:200]}")
+                    logger.info(f"   Attempting OmniParser fallback...")
+                                                    
+                    logger.warning("🔍 Error suggests element detection issue - trying OmniParser...")
+                    
+                    # Extract what to look for
+                    element_desc = self._extract_element_description(task, error_context)
+                    
+                    if element_desc is None:
+                        logger.info("⏭️ Skipping OmniParser - not a UI interaction task")
+                        # Don't continue here - let it retry with next context
+                    elif element_desc:
+                        # Try to detect coordinates
+                        logger.info(f"🎯 Valid UI element detected: '{element_desc}'")
+                        coords = self._detect_element_coordinates(element_desc)
+                        
+                        if coords:
+                            logger.info(f"✅ OmniParser found element at {coords}!")
+                            
+                            # Generate new code with exact coordinates
+                            new_code = self._regenerate_code_with_coordinates(
+                                task, coords, element_desc
+                            )
+                            
+                            # Execute the new code
+                            logger.info("🔄 Executing OmniParser-assisted code...")
+                            logger.debug(f"Generated code:\n{new_code}")  # Use debug level, not info
+                            
+                            exec_result = self.sandbox.execute_code(
+                                code=new_code,
+                                use_docker=False,
+                                retry_on_failure=False
+                            )
+                            
+                            if exec_result.validation_passed and exec_result.security_passed:
+                                logger.info(f"✅✅✅ Task succeeded with OmniParser assistance!")
+                                return self.adapter.execution_result_to_task_result(task, exec_result)
+                            else:
+                                logger.warning("⚠️ OmniParser-assisted code also failed")
+                                logger.debug(f"OmniParser execution stdout: {exec_result.stdout}")
+                                logger.debug(f"OmniParser execution stderr: {exec_result.stderr}")
+                        else:
+                            logger.warning(f"❌ OmniParser couldn't find: '{element_desc}'")
                 start_context_index += self.rag.config.top_k
                 
             except Exception as e:
                 logger.error(f"❌ Exception during RAG execution: {e}")
                 error_context = str(e)
-        
+
         logger.error(f"❌ Task {task.task_id} failed after {max_retries} attempts")
         return TaskResult(
             task_id=task.task_id,
             status="failed",
             error=f"Failed after {max_retries} attempts: {error_context}"
         )
+
+
+
+    # async def execute_action_task(
+    #     self,
+    #     task: ActionTask,
+    #     max_retries: int = 2,
+    #     enable_cache: bool = False
+    # ) -> TaskResult:
+    #     """Execute a single ActionTask using RAG pipeline"""
+    #     logger.info(f"🔄 Processing task {task.task_id}: {task.ai_prompt[:50]}...")
+        
+    #     if task.target_agent != "action":
+    #         logger.warning(f"⚠️ Task {task.task_id} is not an action task, skipping RAG")
+    #         return TaskResult(
+    #             task_id=task.task_id,
+    #             status="failed",
+    #             error="Not an action task - should be handled by reasoning agent"
+    #         )
+        
+    #     rag_query = self.adapter.build_rag_query(task)
+        
+    #     attempt = 0
+    #     error_context = ""
+    #     start_context_index = 0
+        
+    #     # ============================================================
+    #     # 🧪 CHECK IF THIS TASK SHOULD FORCE OMNIPARSER
+    #     # ============================================================
+    #     should_force_omniparser = False
+    #     if FORCE_OMNIPARSER_TEST:
+    #         prompt_lower = task.ai_prompt.lower()
+    #         # Only force OmniParser on tasks that interact with UI elements
+    #         if any(keyword in prompt_lower for keyword in OMNIPARSER_TEST_KEYWORDS):
+    #             # But NOT on app-launching tasks
+    #             if not any(word in prompt_lower.split()[:2] for word in ['open', 'launch', 'start', 'run']):
+    #                 should_force_omniparser = True
+    #                 logger.warning(f"🧪 TESTING MODE: Will force OmniParser for task '{task.ai_prompt}'")
+        
+    #     while attempt < max_retries:
+    #         attempt += 1
+    #         logger.info(f"🔍 Attempt {attempt}/{max_retries} for task {task.task_id}")
+            
+    #         enhanced_query = rag_query
+        
+    #         if error_context:
+    #             enhanced_query += f"\n\nPrevious attempt failed: {error_context}"
+    #             enhanced_query += "\nPlease provide an alternative approach."
+            
+    #         try:
+    #             # ============================================================
+    #             # 🧪 FORCE OMNIPARSER IF CONDITIONS MET
+    #             # ============================================================
+    #             if should_force_omniparser and attempt == 1:
+    #                 logger.warning("🧪 TESTING: Forcing OmniParser activation (simulating failure)")
+                    
+    #                 # Simulate a failure to trigger OmniParser
+    #                 class FakeResult:
+    #                     validation_passed = False
+    #                     security_passed = True
+    #                     validation_errors = ['Element not found']
+    #                     security_violations = []
+    #                     stderr = f"Element not found: {task.ai_prompt.split('on')[-1].strip() if 'on' in task.ai_prompt else 'target element'}"
+    #                     stdout = ''
+                    
+    #                 exec_result = FakeResult()
+    #                 error_context = f"Element not found: {task.ai_prompt.split('on')[-1].strip() if 'on' in task.ai_prompt else 'target element'}"
+    #                 logger.warning(f"🧪 Simulated failure with error: {error_context}")
+                    
+    #             else:
+    #                 # ============================================================
+    #                 # NORMAL RAG EXECUTION
+    #                 # ============================================================
+    #                 rag_result = self.rag.generate_code(
+    #                     enhanced_query,
+    #                     cache_key=task.ai_prompt,
+    #                     start_context_index=start_context_index,
+    #                     num_contexts=self.rag.config.top_k
+    #                 )
+                    
+    #                 generated_code = rag_result.get('code', '')
+                    
+    #                 if not generated_code:
+    #                     logger.warning(f"⚠️ No code generated for task {task.task_id}")
+    #                     start_context_index += self.rag.config.top_k
+    #                     continue
+                    
+    #                 logger.debug(f"✅ Generated {len(generated_code)} chars of code")
+                    
+    #                 # Execute in LOCAL sandbox
+    #                 exec_result = self.sandbox.execute_code(
+    #                     code=generated_code,
+    #                     use_docker=False,
+    #                     retry_on_failure=False
+    #                 )
+                    
+    #                 if exec_result.validation_passed and exec_result.security_passed:
+    #                     logger.info(f"✅ Task {task.task_id} completed successfully")
+    #                     return self.adapter.execution_result_to_task_result(task, exec_result)
+                    
+    #                 logger.warning(f"⚠️ Execution failed (attempt {attempt})")
+                    
+    #                 error_context = f"Errors: {', '.join(exec_result.validation_errors)}"
+    #                 if exec_result.stderr:
+    #                     error_context += f" | stderr: {exec_result.stderr[:200]}"
+                
+    #             # ============================================================
+    #             # OMNIPARSER FALLBACK (existing code - no changes needed)
+    #             # ============================================================
+    #             if any(keyword in error_context.lower() for keyword in 
+    #                 [
+    #                     'not found', 'cannot find', 'no such element', 'failed to locate',
+    #                     'modulenotfounderror', 'importerror',
+    #                     'pywinauto', 'uiautomation',
+    #                     'element', 'button', 'window',
+    #                     'failed:', 'error:',
+    #                     'locateonscreen'
+    #                 ]):
+
+    #                 logger.info(f"🔍 OmniParser trigger check:")
+    #                 logger.info(f"   Error context: {error_context[:200]}")
+    #                 logger.info(f"   Attempting OmniParser fallback...")
+                                                    
+    #                 logger.warning("🔍 Error suggests element detection issue - trying OmniParser...")
+                    
+    #                 # Extract what to look for
+    #                 element_desc = self._extract_element_description(task, error_context)
+                    
+    #                 if element_desc is None:
+    #                     logger.info("⏭️ Skipping OmniParser - not a UI interaction task")
+    #                 elif element_desc:
+    #                     logger.info(f"🎯 Valid UI element detected: '{element_desc}'")
+    #                     coords = self._detect_element_coordinates(element_desc)
+                        
+    #                     if coords:
+    #                         logger.info(f"✅ OmniParser found element at {coords}!")
+                            
+    #                         # Generate new code with exact coordinates
+    #                         new_code = self._regenerate_code_with_coordinates(
+    #                             task, coords, element_desc
+    #                         )
+                            
+    #                         logger.info("🔄 Executing OmniParser-assisted code...")
+    #                         logger.debug(f"Generated code:\n{new_code}")
+                            
+    #                         exec_result = self.sandbox.execute_code(
+    #                             code=new_code,
+    #                             use_docker=False,
+    #                             retry_on_failure=False
+    #                         )
+
+    #                         logger.error(f"🔍 FULL DEBUG:")
+    #                         logger.error(f"   stdout: '{exec_result.stdout}'")
+    #                         logger.error(f"   stderr: '{exec_result.stderr}'")
+    #                         logger.error(f"   exit_code: {exec_result.exit_code if hasattr(exec_result, 'exit_code') else 'N/A'}")
+
+
+                            
+    #                         if exec_result.validation_passed and exec_result.security_passed:
+    #                             logger.info(f"✅✅✅ Task succeeded with OmniParser assistance!")
+    #                             return self.adapter.execution_result_to_task_result(task, exec_result)
+    #                         else:
+    #                             logger.warning("⚠️ OmniParser-assisted code also failed")
+    #                             logger.debug(f"OmniParser execution stdout: {exec_result.stdout}")
+    #                             logger.debug(f"OmniParser execution stderr: {exec_result.stderr}")
+    #                     else:
+    #                         logger.warning(f"❌ OmniParser couldn't find: '{element_desc}'")
+                
+    #             start_context_index += self.rag.config.top_k
+                    
+    #         except Exception as e:
+    #             logger.error(f"❌ Exception during RAG execution: {e}")
+    #             error_context = str(e)
+        
+    #     # All retries exhausted
+    #     logger.error(f"❌ Task {task.task_id} failed after {max_retries} attempts")
+    #     return TaskResult(
+    #         task_id=task.task_id,
+    #         status="failed",
+    #         error=f"Failed after {max_retries} attempts: {error_context}"
+    #     )
 
 # ============================================================================
 # Execution Agent Integration
