@@ -124,7 +124,7 @@ async def update_device_status(
 @router.get("/{device_id}/pending-actions")
 async def get_pending_actions(device_id: str = Path(...)):
     """Get pending actions for device (polling endpoint)"""
-    logger.info(f"📥 Android polling for actions: {device_id}")
+    # logger.info(f"📥 Android polling for actions: {device_id}")  # Commented to reduce log spam
     
     if device_id not in PENDING_ACTIONS:
         PENDING_ACTIONS[device_id] = []
@@ -373,7 +373,7 @@ async def get_pending_actions(device_id: str = Path(..., description="Device ID"
     
     Returns list of actions to execute.
     """
-    logger.info(f"📥 Android polling for actions: {device_id}")
+    # logger.info(f"📥 Android polling for actions: {device_id}")  # Commented to reduce log spam
     
     if device_id not in PENDING_ACTIONS:
         PENDING_ACTIONS[device_id] = []
