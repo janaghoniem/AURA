@@ -60,7 +60,7 @@ class MobileReActStrategy:
         # Initialize Groq LLM
         from groq import AsyncGroq
         
-        api_key = "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" 
+        api_key = "API_KEY_PLACEHOLDER"  # Replace with actual key or env var
         self.llm_client = AsyncGroq(api_key=api_key)
         self.model = "llama-3.3-70b-versatile"
         
@@ -77,6 +77,9 @@ class MobileReActStrategy:
         self.last_action_was_click: bool = False  # Track if last action was a click
         self.app_drawer_attempted: bool = False
         self.incomplete_ui_count: int = 0
+        
+        # ✅ NEW: Track typed text to prevent duplicates
+        self.typed_texts: Dict[int, str] = {}  # element_id -> last typed text
         
         logger.info(f"✅ Initialized FIXED MobileReActStrategy for device {device_id}")
     
@@ -97,6 +100,7 @@ class MobileReActStrategy:
         self.incomplete_ui_count = 0
         self.stuck_counter = 0
         self.last_action_was_click = False
+        self.typed_texts.clear()  # Clear typed text tracking
         
         start_time = asyncio.get_event_loop().time()
         actions_executed: List[UIAction] = []
@@ -318,6 +322,21 @@ class MobileReActStrategy:
                 self.last_action_was_click = True
             else:
                 self.last_action_was_click = False
+            
+            # ✅ CRITICAL FIX #2: Validate TYPE actions - prevent duplicates
+            if action_json.get("action_type") == "type":
+                element_id = action_json.get("element_id")
+                text_to_type = action_json.get("text", "")
+                
+                # Check if we already typed this EXACT text in this field
+                if element_id in self.typed_texts:
+                    if self.typed_texts[element_id] == text_to_type:
+                        logger.warning(f"🚫 Already typed '{text_to_type}' in element {element_id}")
+                        logger.warning(f"⏭️ Skipping duplicate type action")
+                        continue  # Skip this action
+                
+                # Store what we're about to type
+                self.typed_texts[element_id] = text_to_type
             
             # Track action history
             self.action_history.append({
@@ -581,9 +600,11 @@ CURRENT SCREEN:
 CRITICAL ANALYSIS RULES:
 1. **BLACKLISTED ELEMENTS**: Elements in blacklist already opened WRONG apps. NEVER click them again!
 
-2. **AURA APP DETECTION**: If you see "AURA" app or com.example.aura_project → YOU ARE IN AURA APP
-   - MUST exit AURA app immediately using BACK
-   - Do NOT interact with AURA app
+2. **AURA APP DETECTION**: Check if you are INSIDE the AURA app (not just seeing it as an icon):
+   - IN AURA APP: Screen shows "Aura App Screen" AND has "Sending..." text AND "Refresh Status" button
+   - NOT IN AURA: Home screen with "aura_project" icon is just the app shortcut
+   - If ACTUALLY IN AURA app → MUST exit immediately using BACK
+   - If just seeing aura icon on home → ignore it
 
 3. **APP MATCHING**:
    - Home screen apps typically: [6] Play Store, [7] Gmail, [8] Photos, [9] YouTube
@@ -603,9 +624,21 @@ CRITICAL ANALYSIS RULES:
    - Request wait action (let UI load)
    - Or scroll to reveal content
 
+7. **SEARCH QUERIES**: For "search for X" tasks:
+   - Step 1: Click search field
+   - Step 2: Type "X"
+   - Step 3: Press keyboard ENTER key to execute search
+   - NEVER type the same text twice in same field
+
+8. **EMAIL/COMPOSE SCREENS**: In Gmail compose or similar:
+   - NEVER type in "To:", "Recipient", or email address fields
+   - User fills these manually
+   - Only fill subject/body if explicitly requested
+
 AVAILABLE ACTIONS:
 - click: Click element by element_id
 - type: Type text into field
+- keyboard_key: Press keyboard key (ENTER, BACK, etc.)
 - scroll: Scroll (up/down/left/right)
 - wait: Wait for UI load
 - global_action: System actions (HOME, BACK, RECENTS)
@@ -614,9 +647,10 @@ AVAILABLE ACTIONS:
 RESPONSE FORMAT (JSON ONLY):
 {{
   "thought": "Brief analysis and next step",
-  "action_type": "click|type|scroll|wait|global_action|complete",
+  "action_type": "click|type|keyboard_key|scroll|wait|global_action|complete",
   "element_id": 5,
   "text": "hello",
+  "key": "ENTER",
   "direction": "down",
   "duration": 1000,
   "global_action": "HOME",
