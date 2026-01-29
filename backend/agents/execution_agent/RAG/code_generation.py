@@ -42,15 +42,18 @@ from datetime import datetime
 @dataclass
 class RAGConfig:
     """Configuration for RAG system"""
-    library_name: str = "pywinauto"
+    library_name: str = "pyautogui"
     
     # Paths
-    vectordb_dir: Path = Path(r"D:\YUSR\agents\execution_agent\RAG\vector_db")
-    models_dir: Path = Path(r"D:\YUSR\agents\execution_agent\RAG\models")
+    #backend\agents\execution_agent\RAG\modelss\pyautogui
+    #backend\agents\execution_agent\RAG\vectordbb\pyautogui
+    vectordb_dir: Path = Path(r"D:\YUSR\backend\agents\execution_agent\RAG\vectordbb")
+    models_dir: Path = Path(r"D:\YUSR\backend\agents\execution_agent\RAG\modelss\pyautogui")
     
     # Retrieval settings
-    top_k: int = 5  # Number of similar chunks to retrieve
-    max_retrieval: int = 15  # ← ADD THIS: Total contexts to retrieve (for 3 retries)
+    #top k is 7 but we made  6 as to be eq to the three trials devision
+    top_k: int =2  # Number of similar chunks to retrieve
+    max_retrieval: int = 6  # ← ADD THIS: Total contexts to retrieve (for 3 retries)
 
     similarity_threshold: float = 0.3  # Minimum similarity score
     
@@ -67,9 +70,9 @@ class RAGConfig:
     
     def __post_init__(self):
         if self.vectordb_dir is None:
-            self.vectordb_dir = Path(f"vectordb/{self.library_name}")
+            self.vectordb_dir = Path(f"vectordbbb/{self.library_name}")
         if self.models_dir is None:
-            self.models_dir = Path(f"models/{self.library_name}")
+            self.models_dir = Path(f"modelsss/{self.library_name}")
 
 config = RAGConfig()
 print(f"RAG Configuration for: {config.library_name}")
@@ -98,22 +101,40 @@ class VectorDBInterface:
         print("Connecting to vector database...")
         
         # Load ChromaDB
-        # self.client = chromadb.PersistentClient(
-        #     path=str(self.config.vectordb_dir)
-        # )
+        self.client = chromadb.PersistentClient(
+          path=str(self.config.vectordb_dir / self.config.library_name)
+        )
         
-        # # Get collection
-        # self.collection = self.client.get_collection(
-        #     name=f"{self.config.library_name}_embeddings"
-        # )
+        # Get collection
+        self.collection = self.client.get_collection(
+            name=f"{self.config.library_name}_embeddings"
+        )
         
         print(f"Connected to collection: {self.collection.name}")
         print(f"Total documents: {self.collection.count()}")
         
         # Load embedding model
-        # model_path = self.config.models_dir / "embedding_model"
-        # self.embedding_model = SentenceTransformer(str(model_path))
+        model_path = self.config.models_dir / "embedding_model"
+        self.embedding_model = SentenceTransformer(str(model_path))
         print(f"Embedding model loaded")
+    # def initialize(self):
+    #       print("Connecting to vector database...")
+    
+    # # Try root first
+    #       self.client = chromadb.PersistentClient(
+    #       path=str(self.config.vectordb_dir / self.config.library_name)
+    #      )
+    
+    #       print(f"Collections in root: {[c.name for c in self.client.list_collections()]}")
+    
+    # # If not found, try subfolder
+    #       if not self.client.list_collections():
+    #         print("Trying subfolder...")
+    #         self.client = chromadb.PersistentClient(
+    #         name=f"{self.config.library_name}_embeddings"
+
+    #         )
+    #       print(f"Collections in subfolder: {[c.name for c in self.client.list_collections()]}")
     
     def search(self, query: str, n_results: int = None) -> Dict:
         """Search for relevant documents"""
@@ -342,14 +363,17 @@ class RAGSystem:
     
     def __init__(self, config: RAGConfig):
         self.config = config
-        # self.vectordb = VectorDBInterface(config)
+        self.vectordb = None
         self.llm = LLMInterface(config)
         self.conversation_history = []
         
     def initialize(self):
         """Initialize RAG system"""
         print("Initializing RAG System...")
-        # self.vectordb.initialize()
+                # ✅ Step 2: Initialize Vector Database Interface
+        # YOU ALREADY HAVE VectorDBInterface - just use it!
+        self.vectordb = VectorDBInterface(self.config)
+        self.vectordb.initialize()
         print("RAG System ready!")
     
     def generate_code(self, user_query: str, cache_key: str = None,  # ← ADD THIS
@@ -374,60 +398,59 @@ class RAGSystem:
         print(f"Query: {user_query}")
         print(f"{'='*80}")
         
-        # # Step 1: Retrieve relevant context ONCE (if not already done)
-        # if not hasattr(self, '_cached_contexts') or self._cached_query != cache_key:
-        #     print("\n[1/3] Retrieving relevant context...")
-        #     self._cached_contexts = self.vectordb.get_relevant_context(cache_key)
-        #     self._cached_query = cache_key
-        #     print(f"Found {len(self._cached_contexts)} relevant documents")
-        # else:
-        #     print(f"\n[1/3] Using cached contexts ({len(self._cached_contexts)} documents)")
+        # Step 1: Retrieve relevant context ONCE (if not already done)
+        if not hasattr(self, '_cached_contexts') or self._cached_query != cache_key:
+            print("\n[1/3] Retrieving relevant context...")
+            self._cached_contexts = self.vectordb.get_relevant_context(cache_key)
+            self._cached_query = cache_key
+            print(f"Found {len(self._cached_contexts)} relevant documents")
+        else:
+            print(f"\n[1/3] Using cached contexts ({len(self._cached_contexts)} documents)")
         
-        # # Step 2: Select subset of contexts based on retry attempt
-        # # Step 2: Select subset of contexts based on retry attempt
-        # if start_context_index >= len(self._cached_contexts):
-        #     # Instead of raising error, use the last available contexts
-        #     print(f"⚠️  Requested index {start_context_index} but only have {len(self._cached_contexts)} contexts")
-        #     print(f"⚠️  Using last available contexts instead")
+        # Step 2: Select subset of contexts based on retry attempt
+        # Step 2: Select subset of contexts based on retry attempt
+        if start_context_index >= len(self._cached_contexts):
+            # Instead of raising error, use the last available contexts
+            print(f"⚠️  Requested index {start_context_index} but only have {len(self._cached_contexts)} contexts")
+            print(f"⚠️  Using last available contexts instead")
             
-        #     # Use the last batch of contexts
-        #     start_context_index = max(0, len(self._cached_contexts) - num_contexts)
+            # Use the last batch of contexts
+            start_context_index = max(0, len(self._cached_contexts) - num_contexts)
             
-        #     # If we've exhausted all contexts, return None to signal retry failure
-        #     if start_context_index == 0 and hasattr(self, '_last_context_index'):
-        #         if self._last_context_index == 0:
-        #             print("❌ All context windows exhausted")
-        #             return {
-        #                 'code': '',
-        #                 'explanation': 'No more contexts available for retry',
-        #                 'full_response': '',
-        #                 'contexts_used': 0,
-        #                 'top_similarity': 0,
-        #                 'references': []
-        #             }
+            # If we've exhausted all contexts, return None to signal retry failure
+            if start_context_index == 0 and hasattr(self, '_last_context_index'):
+                if self._last_context_index == 0:
+                    print("❌ All context windows exhausted")
+                    return {
+                        'code': '',
+                        'explanation': 'No more contexts available for retry',
+                        'full_response': '',
+                        'contexts_used': 0,
+                        'top_similarity': 0,
+                        'references': []
+                    }
 
-        # self._last_context_index = start_context_index  # Track last used index
+        self._last_context_index = start_context_index  # Track last used index
 
-        # end_index = min(start_context_index + num_contexts, len(self._cached_contexts))
-        # contexts = self._cached_contexts[start_context_index:end_index]
+        end_index = min(start_context_index + num_contexts, len(self._cached_contexts))
+        contexts = self._cached_contexts[start_context_index:end_index]
 
-        # if not contexts:
-        #     print("❌ No contexts available in this window")
-        #     return {
-        #         'code': '',
-        #         'explanation': 'No contexts in requested window',
-        #         'full_response': '',
-        #         'contexts_used': 0,
-        #         'top_similarity': 0,
-        #         'references': []
-        #     }
+        if not contexts:
+            print("❌ No contexts available in this window")
+            return {
+                'code': '',
+                'explanation': 'No contexts in requested window',
+                'full_response': '',
+                'contexts_used': 0,
+                'top_similarity': 0,
+                'references': []
+            }
 
         
-        # print(f"Using contexts {start_context_index+1} to {min(end_index, len(self._cached_contexts))}")
+        print(f"Using contexts {start_context_index+1} to {min(end_index, len(self._cached_contexts))}")
         
-        # for i, ctx in enumerate(contexts[:3]):
-        #     print(f"  {start_context_index + i + 1}. Similarity: {ctx['similarity']:.2%} - {ctx['content'][:80]}...")
-        contexts=" "
+        for i, ctx in enumerate(contexts[:3]):
+            print(f"  {start_context_index + i + 1}. Similarity: {ctx['similarity']:.2%} - {ctx['content'][:80]}...")
         # Step 3: Build prompt with selected contexts
         print("\n[2/3] Building prompt...")
         prompt = self._build_prompt(user_query, contexts, conversation_context)
@@ -437,12 +460,7 @@ class RAGSystem:
         print(prompt)
         print("-" * 40)
 
-        prompt_sim="""
-Open Microsoft Word using the Start Menu on Windows. 
-Use pywinauto to ensure the window opens and is ready. 
-Validate that the application is visible and ready for interaction. 
-Do not assume the exact path of the executable or window title.
-        """
+
         # Step 4: Generate code
         print("\n[3/3] Generating code...")
         response = self.llm.generate(
@@ -453,7 +471,7 @@ Do not assume the exact path of the executable or window title.
         # Parse response
         result = self._parse_response(response, contexts)
         
-        print("\n[2/4] printing prompt...")
+        print("\n[4/3] printing parsed prompt response...")
         print(result)
         print("-" * 40)
         
@@ -461,7 +479,7 @@ Do not assume the exact path of the executable or window title.
         self.conversation_history.append({
             'query': user_query,
             'response': result,
-            # 'context_indices': (start_context_index, end_index),
+            'context_indices': (start_context_index, end_index),
             'timestamp': datetime.now().isoformat()
         })
         
@@ -474,34 +492,34 @@ Do not assume the exact path of the executable or window title.
         prompt_parts = []
         
         # # Add conversation context if available
-        # if conversation_context:
-        #     prompt_parts.append("## Previous Conversation:")
-        #     for msg in conversation_context[-3:]:  # Last 3 messages
-        #         prompt_parts.append(f"User: {msg.get('query', '')}")
-        #         if 'code' in msg.get('response', {}):
-        #             prompt_parts.append(f"Assistant: {msg['response']['code'][:200]}...")
-        #     prompt_parts.append("")
+        if conversation_context:
+            prompt_parts.append("## Previous Conversation:")
+            for msg in conversation_context[-3:]:  # Last 3 messages
+                prompt_parts.append(f"User: {msg.get('query', '')}")
+                if 'code' in msg.get('response', {}):
+                    prompt_parts.append(f"Assistant: {msg['response']['code'][:200]}...")
+            prompt_parts.append("")
         
-        # # Add retrieved context
-        # prompt_parts.append(f"## Relevant {self.config.library_name} Documentation and Examples:")
-        # prompt_parts.append("")
+        # Add retrieved context
+        prompt_parts.append(f"## Relevant {self.config.library_name} Documentation and Examples:")
+        prompt_parts.append("")
         
-        # total_length = 0
-        # for i, ctx in enumerate(contexts):
-        #     content = ctx['content']
+        total_length = 0
+        for i, ctx in enumerate(contexts):
+            content = ctx['content']
             
-        #     # Truncate if needed
-        #     if total_length + len(content) > self.config.max_context_length:
-        #         content = content[:self.config.max_context_length - total_length]
+            # Truncate if needed
+            if total_length + len(content) > self.config.max_context_length:
+                content = content[:self.config.max_context_length - total_length]
             
-        #     prompt_parts.append(f"### Reference {i+1} (Relevance: {ctx['similarity']:.0%}):")
-        #     prompt_parts.append(content)
-        #     prompt_parts.append("")
+            prompt_parts.append(f"### Reference {i+1} (Relevance: {ctx['similarity']:.0%}):")
+            prompt_parts.append(content)
+            prompt_parts.append("")
             
-        #     total_length += len(content)
+            total_length += len(content)
             
-        #     if total_length >= self.config.max_context_length:
-        #         break
+            if total_length >= self.config.max_context_length:
+                break
         
         # Add user query
         # prompt_parts.append("## User Request:")
@@ -712,16 +730,16 @@ OUTPUT FORMAT (STRICT)
         return {
             'code': code,
             'explanation': explanation,
-            'full_response': response
-            # 'contexts_used': len(contexts),
-            # 'top_similarity': contexts[0]['similarity'] if contexts else 0,
-            # 'references': [
-            #     {
-            #         'source': ctx['metadata'].get('source', 'unknown'),
-            #         'similarity': ctx['similarity']
-            #     }
-            #     for ctx in contexts[:3]
-            # ]
+            'full_response': response,
+            'contexts_used': len(contexts),
+            'top_similarity': contexts[0]['similarity'] if contexts else 0,
+            'references': [
+                {
+                    'source': ctx['metadata'].get('source', 'unknown'),
+                    'similarity': ctx['similarity']
+                }
+                for ctx in contexts[:3]
+            ]
         }
     
     def chat(self, message: str) -> Dict:
