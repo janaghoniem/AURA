@@ -132,3 +132,7 @@ class Config:
     def get_audit_file(cls):
         """Get audit log file path"""
         return cls.LOG_DIR / "audit.json"
+    
+    # OmniParser settings
+    OMNIPARSER_CONFIDENCE = 0.3  # Detection confidence threshold
+    OMNIPARSER_ENABLED = True     # Enable/disable OmniParser fallback

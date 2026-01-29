@@ -20,7 +20,14 @@ from pathlib import Path
 from ..core.exec_agent_config import Config
 from ..core.exec_agent_models import VisionResult
 from ..core.exec_agent_deps import PYWINAUTO_AVAILABLE, PYAUTOGUI_AVAILABLE, OCR_AVAILABLE, pyautogui, pytesseract, Image
-
+from ..fallback import OmniParserDetector, OMNIPARSER_AVAILABLE
+# Add after other imports
+try:
+    from ..fallback import OmniParserDetector, OMNIPARSER_AVAILABLE
+    OMNIPARSER_AVAILABLE = True
+except ImportError as e:
+    OMNIPARSER_AVAILABLE = False
+    OmniParserDetector = None
 
 class VisionLayer:
     """
@@ -31,7 +38,51 @@ class VisionLayer:
         self.logger = logger
         self.screenshot_dir = Config.SCREENSHOT_DIR
         self.screenshot_dir.mkdir(exist_ok=True)
-    
+
+        #by shahd for the fallback :)
+        self.omniparser = None
+        if OMNIPARSER_AVAILABLE and OmniParserDetector is not None:
+            try: 
+                self.omniparser_detector = OmniParserDetector(logger)
+                self.logger.info("✅ OmniParserDetector fallback available")
+            except Exception as e:
+                self.logger.error(f"❌ Failed to initialize OmniParserDetector: {e}")
+                self.omniparser = None
+        else:
+            self.logger.info("⚠️ OmniParserDetector fallback NOT available")
+
+
+    def detect_element_omniparser(self, target_text: str) -> VisionResult:
+        """
+        Detect element using OmniParser (Advanced AI fallback)
+        Use when UIA, OCR, and CV all fail
+        
+        Args:
+            target_text: Description of element to find
+        
+        Returns:
+            VisionResult
+        """
+        if not OMNIPARSER_AVAILABLE or self.omniparser is None:
+            return VisionResult(False, None, 0.0, None, "omniparser_unavailable")
+        
+        try:
+            # Capture fresh screenshot
+            screenshot_path = self.capture_screen()
+            if not screenshot_path:
+                return VisionResult(False, None, 0.0, None, "omniparser_screenshot_failed")
+            
+            # Use OmniParser to detect
+            result = self.omniparser.detect_element_by_text(target_text, screenshot_path)
+            
+            return result
+        
+        except Exception as e:
+            self.logger.error(f"OmniParser detection error: {e}")
+            return VisionResult(False, None, 0.0, None, f"omniparser_error: {e}")
+
+
+        #done, with regards, shahd :)
     def capture_screen(self, region=None) -> Optional[str]:
         """
         Capture screenshot of screen or specific region
@@ -189,3 +240,95 @@ class VisionLayer:
         except Exception as e:
             self.logger.error(f"Computer Vision detection error: {e}")
             return VisionResult(False, None, 0.0, None, "cv_error")
+        
+
+
+    def detect_element(self, window, element_description: Dict, fallback_strategy: str = "aggressive") -> VisionResult:
+        """
+        Detect element using multiple methods with fallback
+        
+        Args:
+            window: PyWinAuto window object (can be None for OmniParser)
+            element_description: Dict with element selectors
+            fallback_strategy: "conservative" (UIA→OCR) or "aggressive" (UIA→OCR→OmniParser)
+        
+        Returns:
+            VisionResult
+        """
+        FORCE_OMNIPARSER_TEST = True
+        #OMNIPARSER TEST MODE
+        if FORCE_OMNIPARSER_TEST:
+            self.logger.warning("🧪 TEST MODE ACTIVE: Forcing all standard methods to fail")
+            self.logger.warning("🧪 This will skip UIA, OCR, and CV - going straight to OmniParser")
+                
+            # Skip directly to OmniParser section
+            search_text = element_description.get('text') or element_description.get('title') or element_description.get('auto_id')
+                
+            if search_text:
+                self.logger.info(f"🔍 OmniParser searching for: '{search_text}'")
+                result = self.detect_element_omniparser(search_text)
+                    
+                if result.element_found:
+                    self.logger.info(f"✅ OMNIPARSER TEST SUCCESS! Found '{result.detected_text}' at {result.coordinates}")
+                    return result
+                else:
+                    self.logger.error(f"❌ OmniParser failed in test mode: {result.method_used}")
+                    return VisionResult(False, None, 0.0, None, "omniparser_test_failed")
+            else:
+                self.logger.error("❌ No search text provided for OmniParser test")
+                return VisionResult(False, None, 0.0, None, "no_search_text")      
+
+
+
+
+
+        # Try UIA first (if window provided)
+        if window is not None:
+            result = self.detect_element_uia(window, element_description)
+            if result.element_found:
+                self.logger.info(f"✓ Element found via UIA")
+                return result
+        
+        # Try OCR fallback
+        if 'text' in element_description:
+            self.logger.info("UIA failed, trying OCR fallback...")
+            result = self.detect_element_ocr(element_description['text'])
+            if result.element_found:
+                self.logger.info(f"✓ Element found via OCR")
+                return result
+        
+        # Try computer vision (if template provided)
+        if 'template' in element_description:
+            self.logger.info("OCR failed, trying CV fallback...")
+            result = self.detect_element_image(element_description['template'])
+            if result.element_found:
+                self.logger.info(f"✓ Element found via CV")
+                return result
+        
+        # ========================================================================
+        # CRITICAL: OmniParser Fallback (NEW CODE STARTS HERE)
+        # ========================================================================
+        if fallback_strategy == "aggressive":
+            self.logger.warning("⚠️ All standard methods failed, activating OmniParser fallback...")
+            
+            # Try OmniParser as last resort
+            search_text = element_description.get('text') or element_description.get('title') or element_description.get('auto_id')
+            
+            if search_text:
+                self.logger.info(f"🔍 OmniParser searching for: '{search_text}'")
+                result = self.detect_element_omniparser(search_text)
+                
+                if result.element_found:
+                    self.logger.info(f"✅ OMNIPARSER FALLBACK SUCCESS! Found '{result.detected_text}' at {result.coordinates}")
+                    return result
+                else:
+                    self.logger.warning(f"❌ OmniParser also failed: {result.method_used}")
+            else:
+                self.logger.warning("❌ No text/title to search with OmniParser")
+        # ========================================================================
+        # END OF NEW CODE
+        # ========================================================================
+        
+        # All methods failed
+        self.logger.error("❌ All detection methods exhausted (UIA → OCR → CV → OmniParser)")
+        return VisionResult(False, None, 0.0, None, "all_methods_failed")
