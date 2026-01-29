@@ -84,3 +84,8 @@ backend/conversations.jsonl
 backend/conversations.jsonl
 
 /backend/sandbox_logs
+
+*.sqlite3
+*.db
+vectordb/
+chromadb/
