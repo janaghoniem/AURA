@@ -47,8 +47,8 @@ class RAGConfig:
     # Paths
     #backend\agents\execution_agent\RAG\modelss\pyautogui
     #backend\agents\execution_agent\RAG\vectordbb\pyautogui
-    vectordb_dir: Path = Path(r"D:\YUSR\backend\agents\execution_agent\RAG\vectordbb")
-    models_dir: Path = Path(r"D:\YUSR\backend\agents\execution_agent\RAG\modelss\pyautogui")
+    vectordb_dir: Path = Path(r"D:\YUSR\backend\agents\execution_agent\RAG\vectordb")
+    models_dir: Path = Path(r"D:\YUSR\backend\agents\execution_agent\RAG\models\pyautogui")
     
     # Retrieval settings
     #top k is 7 but we made  6 as to be eq to the three trials devision
@@ -401,7 +401,7 @@ class RAGSystem:
         # Step 1: Retrieve relevant context ONCE (if not already done)
         if not hasattr(self, '_cached_contexts') or self._cached_query != cache_key:
             print("\n[1/3] Retrieving relevant context...")
-            self._cached_contexts = self.vectordb.get_relevant_context(cache_key)
+            self._cached_contexts = self.vectordb.get_relevant_context(cache_key) or []
             self._cached_query = cache_key
             print(f"Found {len(self._cached_contexts)} relevant documents")
         else:
@@ -436,15 +436,8 @@ class RAGSystem:
         contexts = self._cached_contexts[start_context_index:end_index]
 
         if not contexts:
-            print("❌ No contexts available in this window")
-            return {
-                'code': '',
-                'explanation': 'No contexts in requested window',
-                'full_response': '',
-                'contexts_used': 0,
-                'top_similarity': 0,
-                'references': []
-            }
+            print("⚠️ No contexts available - proceeding without examples")
+            contexts = []  # Empty list, not an error
 
         
         print(f"Using contexts {start_context_index+1} to {min(end_index, len(self._cached_contexts))}")
@@ -500,26 +493,29 @@ class RAGSystem:
                     prompt_parts.append(f"Assistant: {msg['response']['code'][:200]}...")
             prompt_parts.append("")
         
+        if contexts: 
         # Add retrieved context
-        prompt_parts.append(f"## Relevant {self.config.library_name} Documentation and Examples:")
-        prompt_parts.append("")
-        
-        total_length = 0
-        for i, ctx in enumerate(contexts):
-            content = ctx['content']
-            
-            # Truncate if needed
-            if total_length + len(content) > self.config.max_context_length:
-                content = content[:self.config.max_context_length - total_length]
-            
-            prompt_parts.append(f"### Reference {i+1} (Relevance: {ctx['similarity']:.0%}):")
-            prompt_parts.append(content)
+            prompt_parts.append(f"## Relevant {self.config.library_name} Documentation and Examples:")
             prompt_parts.append("")
             
-            total_length += len(content)
-            
-            if total_length >= self.config.max_context_length:
-                break
+            total_length = 0
+            for i, ctx in enumerate(contexts):
+                content = ctx['content']
+                
+                # Truncate if needed
+                if total_length + len(content) > self.config.max_context_length:
+                    content = content[:self.config.max_context_length - total_length]
+                
+                prompt_parts.append(f"### Reference {i+1} (Relevance: {ctx['similarity']:.0%}):")
+                prompt_parts.append(content)
+                prompt_parts.append("")
+                
+                total_length += len(content)
+                
+                if total_length >= self.config.max_context_length:
+                    break
+        else:
+            prompt_parts.append("## Note: No similar examples found, using general knowledge")
         
         # Add user query
         # prompt_parts.append("## User Request:")
