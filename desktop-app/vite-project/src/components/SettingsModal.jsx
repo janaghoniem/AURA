@@ -190,7 +190,7 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
 
             {activeSection === "memory" && (
               <div className="settings-section">
-                <h3 className="section-title">Long-Term Memory</h3>
+                <h3 className="section-title">Memory</h3>
                 <p style={{ fontSize: "14px", color: "rgba(255,255,255,0.7)", marginBottom: "20px" }}>
                   Your AI learns your preferences over time. This includes your name, app choices, and work patterns.
                 </p>
