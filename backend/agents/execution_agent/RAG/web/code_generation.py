@@ -28,7 +28,7 @@ class PlaywrightRAGConfig:
     # Retrieval settings
     top_k: int = 5
     max_retrieval: int = 15
-    similarity_threshold: float = 0.3
+    similarity_threshold: float = 0.1
     
     # LLM settings (MATCHED TO DESKTOP RAG)
     llm_provider: str = "groq"
@@ -143,6 +143,35 @@ class PlaywrightVectorDB:
                 })
         
         return contexts
+    
+    # ✅ FIX 2: Add debug search method
+    def debug_search(self, query: str) -> None:
+        """Debug why search returns no results"""
+        print(f"\n🔍 DEBUG SEARCH FOR: '{query}'")
+        
+        # Test embedding
+        try:
+            query_embedding = self.embedding_model.encode([query])[0]
+            print(f"✅ Query embedding shape: {query_embedding.shape}")
+        except Exception as e:
+            print(f"❌ Embedding failed: {e}")
+            return
+        
+        # Get ALL documents (no filtering)
+        results = self.collection.query(
+            query_embeddings=[query_embedding.tolist()],
+            n_results=10
+        )
+        
+        if results['documents'][0]:
+            print(f"\n📊 Top 10 Results:")
+            for i, (doc, dist) in enumerate(zip(results['documents'][0], results['distances'][0])):
+                similarity = 1 - dist
+                print(f"  {i+1}. Distance: {dist:.4f} | Similarity: {similarity:.2%}")
+                print(f"     {doc[:100]}...")
+        else:
+            print("❌ No documents in collection!")
+            print(f"   Collection count: {self.collection.count()}")
 
 # ============================================================================
 # LLM INTERFACE (FIXED)
@@ -307,6 +336,11 @@ class PlaywrightRAGSystem:
         print(f"\n{'='*80}")
         print(f"🔍 Query: {user_query}")
         print(f"{'='*80}")
+        
+        # ✅ FIX 2: Add debug call on first run
+        if not hasattr(self, '_debugged'):
+            self.vectordb.debug_search(user_query)
+            self._debugged = True  # Only debug once
         
         # Step 1: Retrieve relevant context
         if not hasattr(self, '_cached_contexts') or self._cached_query != (cache_key or user_query):

@@ -153,6 +153,19 @@ task_queue = TaskQueue()
 # Track pending results
 pending_results: Dict[str, asyncio.Future] = {}
 
+# Helper function for guarded futures
+def create_guarded_future(task_id: str) -> asyncio.Future:
+    """
+    Create a future with built-in state tracking
+    
+    Returns:
+        asyncio.Future with task_id attached for debugging
+    """
+    future = asyncio.Future()
+    future._task_id = task_id  # Attach ID for debugging
+    future._created_at = datetime.now()
+    return future
+
 # --- LangGraph State ---
 class CoordinatorState(BaseModel):
     input: Dict[str, Any]
@@ -164,6 +177,11 @@ class CoordinatorState(BaseModel):
     original_message_id: Optional[str] = None
     user_id: Optional[str] = None
     preferences_context: Optional[str] = None
+    
+    # ✅ FIX 3: Add conversation history tracking
+    conversation_history: List[Dict] = Field(default_factory=list)
+    last_successful_action: Optional[str] = None
+    current_page_url: Optional[str] = None
 
 # ============================================================================
 # ENHANCED TASK DECOMPOSITION - NO HARDCODED URLs
@@ -172,11 +190,21 @@ class CoordinatorState(BaseModel):
 async def decompose_task_to_actions(
     user_request: Dict[str, Any],
     preferences_context: str,
-    device_type: str = "desktop"
+    device_type: str = "desktop",
+    conversation_history: List[Dict] = None  # ✅ FIX 3: Add history parameter
 ) -> Dict[str, Any]:
     """Decompose user request into ActionTask queue - URLs resolved by execution layer"""
     
     device_hint = f"The user is on a {device_type} device. Tailor task recommendations accordingly.\n\n"
+    
+    # ✅ FIX 3: Build conversation history context
+    history_context = ""
+    if conversation_history:
+        history_context = "\n\n# CONVERSATION HISTORY (Last 3 interactions)\n"
+        for entry in conversation_history[-3:]:
+            history_context += f"User: {entry.get('user_message', '')}\n"
+            history_context += f"Action: {entry.get('action_taken', '')}\n"
+            history_context += f"Result: {entry.get('result', '')}\n\n"
     
     prompt = f"""{device_hint}You are the AURA Task Decomposition Agent. Convert user requests into low-level executable tasks.
 
@@ -185,6 +213,7 @@ async def decompose_task_to_actions(
 
 # USER PREFERENCES
 {preferences_context}
+{history_context}
 
 ============================
 CORE BEHAVIOR RULES
@@ -535,7 +564,13 @@ def create_coordinator_graph():
             preferences_context = f"{preferences_context}{execution_context}"
 
         # Decompose task
-        plan_result = await decompose_task_to_actions(raw_task, preferences_context, device_type)
+        # ✅ FIX 3: Pass conversation history to decomposition
+        plan_result = await decompose_task_to_actions(
+            raw_task, 
+            preferences_context, 
+            device_type,
+            conversation_history=state.get("conversation_history", [])
+        )
         
         tasks = plan_result.get("tasks", [])
         
@@ -650,6 +685,22 @@ def create_coordinator_graph():
         
         success_count = sum(1 for r in results.values() if r.status == "success")
         total_count = len(results)
+        
+        # ✅ FIX 3: Update conversation history
+        if success_count > 0:
+            if "conversation_history" not in state:
+                state["conversation_history"] = []
+            
+            state["conversation_history"].append({
+                "user_message": state['input'].get('action', ''),
+                "action_taken": f"Executed {success_count} tasks",
+                "result": "success" if success_count == total_count else "partial",
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Keep only last 10 interactions
+            if len(state["conversation_history"]) > 10:
+                state["conversation_history"] = state["conversation_history"][-10:]
         
         if success_count == total_count and total_count > 0:
             response_text = f"Task completed successfully! Executed {success_count} steps."
@@ -852,7 +903,7 @@ async def execute_single_task(
     )
     
     # Create future for response
-    future = asyncio.Future()
+    future = create_guarded_future(task.task_id)
     pending_results[task.task_id] = future
     
     # Publish
@@ -899,7 +950,8 @@ async def start_coordinator_agent(broker_instance):
             "input": message.payload,
             "session_id": session_id,
             "original_message_id": http_request_id,
-            "user_id": user_id
+            "user_id": user_id,
+            "conversation_history": []  # ✅ FIX 3: Initialize empty if not present
         }
         config = {
             "configurable": {
@@ -916,12 +968,46 @@ async def start_coordinator_agent(broker_instance):
         await ThinkingStepManager.update_step(session_id, "Organizing execution...", http_request_id)
     
     async def handle_action_result(message: AgentMessage):
-        """Handle result from Action/Reasoning layer"""
-        task_id = message.task_id
-        logger.info(f"📬 Result for {task_id}: {message.payload.get('status')}")
+        """
+        Handle result from Action/Reasoning layer (ASYNC-SAFE VERSION)
         
-        if task_id in pending_results:
-            pending_results[task_id].set_result(message.payload)
+        ✅ FIXES:
+        - InvalidStateError from duplicate set_result() calls
+        - Race conditions in future handling
+        - Silent failures when results arrive out of order
+        """
+        task_id = message.task_id
+        result_status = message.payload.get('status', 'unknown')
+        
+        logger.info(f"📬 Result for {task_id}: {result_status}")
+        
+        # Check if we're expecting this result
+        if task_id not in pending_results:
+            logger.warning(f"⚠️ Received result for unknown task {task_id} (may have timed out)")
+            return
+        
+        future = pending_results[task_id]
+        
+        # ✅ CRITICAL FIX: Guard against duplicate results
+        if future.done():
+            logger.warning(
+                f"⚠️ Task {task_id} already resolved - "
+                f"ignoring duplicate result with status '{result_status}'"
+            )
+            return
+        
+        # ✅ Safe to set result now
+        try:
+            future.set_result(message.payload)
+            logger.debug(f"✅ Successfully set result for task {task_id}")
+        except asyncio.InvalidStateError as e:
+            # This should never happen now, but log if it does
+            logger.error(
+                f"❌ Unexpected InvalidStateError for {task_id}: {e}\n"
+                f"Future state: done={future.done()}, cancelled={future.cancelled()}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Unexpected error setting result for {task_id}: {e}")
     
     async def handle_interrupt_command(message: AgentMessage):
         """Handle pause/stop/resume commands"""

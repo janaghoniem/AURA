@@ -1,13 +1,13 @@
 # ============================================================================
-# WEB CODE EXECUTION - RAG + PLAYWRIGHT INTEGRATION
+# WEB CODE EXECUTION - RAG + PLAYWRIGHT INTEGRATION (FIXED)
 # ============================================================================
-# Simplified version - RAG handles ALL web automation
-# No hardcoded URLs or selectors
+
 
 import asyncio
 import logging
 import json
 import os
+import re
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,6 +38,8 @@ class WebExecutionConfig:
     slow_mo: int = 100  # milliseconds between actions
     viewport_width: int = 1280
     viewport_height: int = 720
+    enable_verification: bool = True  # ✅ NEW: Enable post-action verification
+    enable_page_context: bool = True  # ✅ NEW: Enable DOM-aware context
 
 @dataclass
 class WebExecutionResult:
@@ -53,13 +55,14 @@ class WebExecutionResult:
     extracted_data: Optional[Dict] = None
     screenshot_path: Optional[str] = None
     execution_time: float = 0.0
+    verification_message: Optional[str] = None  # ✅ NEW: Verification details
 
 # ============================================================================
-# WEB EXECUTION PIPELINE - RAG ONLY
+# WEB EXECUTION PIPELINE - RAG + DOM AWARENESS
 # ============================================================================
 
 class WebExecutionPipeline:
-    """Handles Playwright-based web automation using RAG only"""
+    """Handles Playwright-based web automation using RAG with DOM awareness"""
     
     def __init__(self, config: WebExecutionConfig):
         self.config = config
@@ -73,23 +76,77 @@ class WebExecutionPipeline:
         Path(self.config.screenshot_dir).mkdir(parents=True, exist_ok=True)
     
     async def initialize(self):
-        """Initialize Playwright browser"""
+        """Initialize Playwright browser with anti-detection"""
         try:
             from playwright.async_api import async_playwright
             
-            logger.info("Initializing Playwright...")
+            logger.info("Initializing Playwright with stealth mode...")
             
             self.playwright = await async_playwright().start()
+            
+            # ✅ FIX 4: ANTI-DETECTION LAUNCH ARGS
             self.browser = await self.playwright.chromium.launch(
                 headless=self.config.headless,
-                slow_mo=self.config.slow_mo
+                slow_mo=self.config.slow_mo,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--disable-web-security',
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-infobars',
+                    '--window-size=1920,1080',
+                    '--start-maximized'
+                ]
             )
             
+            # ✅ FIX 4: STEALTH CONTEXT
             self.context = await self.browser.new_context(
-                viewport={'width': self.config.viewport_width, 'height': self.config.viewport_height}
+                viewport={'width': self.config.viewport_width, 'height': self.config.viewport_height},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                locale='en-US',
+                timezone_id='America/New_York',
+                permissions=['geolocation'],
+                geolocation={'longitude': -74.006, 'latitude': 40.7128},  # New York
+                extra_http_headers={
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+                }
             )
             
-            logger.info("Playwright initialized successfully")
+            # ✅ FIX 4: INJECT ANTI-DETECTION SCRIPTS
+            await self.context.add_init_script("""
+                // Override navigator.webdriver
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                
+                // Mock plugins
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                
+                // Mock languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+                
+                // Override chrome detection
+                window.chrome = {
+                    runtime: {}
+                };
+                
+                // Mock permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+            """)
+            
+            logger.info("✅ Playwright initialized with anti-detection measures")
             
         except Exception as e:
             logger.error(f"Failed to initialize Playwright: {e}")
@@ -137,7 +194,7 @@ class WebExecutionPipeline:
         task: Dict[str, Any],
         session_id: str = "default"
     ) -> WebExecutionResult:
-        """Execute a web automation task using RAG"""
+        """Execute a web automation task using RAG with DOM awareness"""
         
         start_time = datetime.now()
         task_id = task.get('task_id', 'unknown')
@@ -162,11 +219,15 @@ class WebExecutionPipeline:
                     execution_time=(datetime.now() - start_time).total_seconds()
                 )
             
-            # Generate code using RAG
+            # ✅ NEW: Capture page state before execution
+            url_before = page.url
+            action_type = task.get('web_params', {}).get('action', 'unknown')
+            
+            # Generate code using RAG (now with DOM context)
             logger.info(f"Using RAG to generate code from: {ai_prompt}")
             
             try:
-                generated_code = await self._generate_code_from_rag(ai_prompt)
+                generated_code = await self._generate_code_from_rag(ai_prompt, page, task)
             except Exception as e:
                 logger.error(f"RAG generation failed: {e}")
                 return WebExecutionResult(
@@ -189,6 +250,33 @@ class WebExecutionPipeline:
             # Execute RAG-generated code
             logger.info(f"Executing RAG-generated Playwright code")
             result = await self._execute_generated_code(page, generated_code, task_id)
+            
+            # ✅ NEW: Post-action verification (if enabled and execution succeeded)
+            verification_passed = True
+            verification_message = None
+            
+            if self.config.enable_verification and result.get('success'):
+                from agents.execution_agent.RAG.web.verifiers import verify_action
+                
+                verify_context = {
+                    'url_before': url_before,
+                    'text': task.get('web_params', {}).get('text'),
+                    'task_id': task_id,
+                    'extracted_data': result.get('extracted_data')
+                }
+                
+                verification_passed, verification_message = await verify_action(
+                    page, 
+                    action_type, 
+                    verify_context
+                )
+                
+                if not verification_passed:
+                    logger.error(f"❌ Verification failed: {verification_message}")
+                    result['success'] = False
+                    result['error'] = f"Action executed but verification failed: {verification_message}"
+                else:
+                    logger.info(f"✅ Verification passed: {verification_message}")
             
             # Get page info
             page_url = page.url
@@ -215,7 +303,8 @@ class WebExecutionPipeline:
                 page_title=page_title,
                 extracted_data=result.get('extracted_data'),
                 screenshot_path=screenshot_path,
-                execution_time=execution_time
+                execution_time=execution_time,
+                verification_message=verification_message
             )
             
         except asyncio.TimeoutError:
@@ -237,16 +326,34 @@ class WebExecutionPipeline:
                 execution_time=(datetime.now() - start_time).total_seconds()
             )
     
-    async def _generate_code_from_rag(self, ai_prompt: str) -> str:
-        """Generate Playwright code using RAG"""
+    async def _generate_code_from_rag(
+        self, 
+        ai_prompt: str, 
+        page, 
+        task: Dict[str, Any]
+    ) -> str:
+        """Generate Playwright code using RAG with DOM-aware context"""
         
         await self._initialize_rag_system()
+        
+        # ✅ NEW: Build enhanced prompt with page context
+        if self.config.enable_page_context:
+            from agents.execution_agent.RAG.web.page_inspector import build_rag_context
+            
+            try:
+                enhanced_prompt = await build_rag_context(page, ai_prompt)
+                logger.info(f"🔍 Using DOM-aware RAG context")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not build page context: {e}")
+                enhanced_prompt = ai_prompt
+        else:
+            enhanced_prompt = ai_prompt
         
         logger.info(f"RAG Query: {ai_prompt}")
         
         try:
             rag_result = self._rag_system.generate_code(
-                ai_prompt,
+                enhanced_prompt,
                 include_explanation=False
             )
             
@@ -272,13 +379,11 @@ class WebExecutionPipeline:
         code: str,
         task_id: str
     ) -> Dict[str, Any]:
-        """Execute RAG-generated Playwright code"""
+        """Execute RAG-generated Playwright code with proper failure detection"""
         
         logger.info(f"Executing generated code for task {task_id}")
         
         try:
-            import re
-            
             logger.debug(f"Original code length: {len(code)} chars")
             
             # ==============================
@@ -305,26 +410,41 @@ class WebExecutionPipeline:
             logger.debug(f"Cleaned code length: {len(code)} chars")
             
             # ==============================
-            # WRAP IN ASYNC FUNCTION
+            # WRAP IN ASYNC FUNCTION WITH OUTPUT CAPTURE
             # ==============================
             def _indent(text, spaces=4):
                 """Indent text by specified number of spaces"""
                 return '\n'.join((' ' * spaces) + line if line.strip() else line for line in text.splitlines())
             
             wrapped_code = f"""
+import sys
+from io import StringIO
+
+# Capture stdout
+_stdout_capture = StringIO()
+_original_stdout = sys.stdout
+
 async def __rag_step__(page):
-{_indent(code, 4)}
+    # Redirect stdout to capture
+    sys.stdout = _stdout_capture
+    
+    try:
+{_indent(code, 8)}
+    finally:
+        # Restore stdout
+        sys.stdout = _original_stdout
 """
             
             logger.debug(f"Wrapped code preview:\n{wrapped_code[:300]}...")
             
             # ==============================
-            # EXECUTE
+            # EXECUTE WITH OUTPUT CAPTURE
             # ==============================
             exec_namespace = {
                 'page': page,
                 'asyncio': asyncio,
-                '__result__': None
+                '__result__': None,
+                '__stdout__': ''
             }
             
             # Define __rag_step__ in namespace
@@ -334,15 +454,30 @@ async def __rag_step__(page):
             logger.info(f"Executing wrapped RAG code...")
             result_data = await exec_namespace['__rag_step__'](page)
             
+            # Get captured stdout
+            stdout_content = exec_namespace['_stdout_capture'].getvalue()
+            exec_namespace['__stdout__'] = stdout_content
+            
             # If RAG code sets __result__, use that instead
             if exec_namespace.get('__result__') is not None:
                 result_data = exec_namespace['__result__']
             
-            logger.info(f"Code executed successfully")
+            # ✅ CRITICAL FIX: Parse stdout for success/failure
+            success, message = self._parse_execution_output(stdout_content)
+            
+            if not success:
+                logger.error(f"❌ Code reported failure: {message}")
+                return {
+                    'success': False,
+                    'error': message,
+                    'output': stdout_content
+                }
+            
+            logger.info(f"✅ Code executed successfully")
             
             return {
                 'success': True,
-                'output': 'Code executed successfully',
+                'output': stdout_content,
                 'extracted_data': result_data
             }
             
@@ -354,6 +489,40 @@ async def __rag_step__(page):
                 'success': False,
                 'error': str(e)
             }
+    
+    def _parse_execution_output(self, stdout: str) -> tuple[bool, str]:
+        """
+        ✅ NEW: Parse stdout to determine actual success/failure
+        
+        Returns:
+            (success: bool, message: str)
+        """
+        
+        # Check for explicit failure from Playwright
+        if 'FAILED:' in stdout:
+            # Extract failure message
+            failure_msg = stdout.split('FAILED:')[1].split('\n')[0].strip()
+            return False, f"Playwright error: {failure_msg}"
+        
+        # Check for Playwright timeout errors
+        if 'Timeout' in stdout and 'exceeded' in stdout:
+            return False, "Playwright timeout exceeded"
+        
+        # Check for element not found errors
+        if 'not found' in stdout.lower() or 'cannot find' in stdout.lower():
+            return False, "Required element not found on page"
+        
+        # Check for success indicator
+        if 'EXECUTION_SUCCESS' in stdout:
+            return True, "Execution successful"
+        
+        # If we have output but no clear success marker
+        if len(stdout.strip()) > 0:
+            # Assume success if there's output and no failure indicators
+            return True, "Code executed (no explicit success marker)"
+        
+        # Empty output - probably failed
+        return False, "No output generated (execution may have failed)"
     
     def _security_check(self, code: str) -> Dict[str, Any]:
         """Basic security validation"""
@@ -504,6 +673,8 @@ class WebRAGTaskAdapter:
         if execution_result.validation_passed and execution_result.security_passed:
             status = "success"
             content = execution_result.output
+            if execution_result.verification_message:
+                content = f"{content}\nVerification: {execution_result.verification_message}"
             error = None
         else:
             status = "failed"
@@ -565,6 +736,7 @@ class CoordinatorWebBridge:
                 task_dict = {
                     'task_id': task.task_id,
                     'ai_prompt': task.ai_prompt,
+                    'web_params': task.web_params
                 }
                 
                 exec_result = await self.web.execute_web_task(task_dict, session_id)
@@ -650,7 +822,7 @@ async def start_web_execution_agent_with_rag(broker_instance, rag_system, web_pi
     from agents.utils.protocol import Channels
     broker_instance.subscribe(Channels.COORDINATOR_TO_EXECUTION, handle_web_execution_request)
     
-    logger.info("Web Execution Agent started with RAG + Playwright integration")
+    logger.info("Web Execution Agent started with RAG + Playwright + DOM awareness")
     
     while True:
         await asyncio.sleep(1)
@@ -684,18 +856,20 @@ async def initialize_web_execution_agent_for_server(broker_instance):
             
             web_config = WebExecutionConfig(
                 headless=False,
-                timeout_seconds=30
+                timeout_seconds=30,
+                enable_verification=True,  # ✅ Enable verification
+                enable_page_context=True   # ✅ Enable DOM awareness
             )
             web_pipeline = WebExecutionPipeline(web_config)
             await web_pipeline.initialize()
             
-            logger.info("Playwright web pipeline ready")
+            logger.info("Playwright web pipeline ready with verification enabled")
             
         except Exception as e:
             logger.error(f"Web pipeline initialization error: {e}")
             raise
         
-        logger.info("Starting web execution agent with RAG + Playwright...")
+        logger.info("Starting web execution agent with RAG + Playwright + Verification...")
         await start_web_execution_agent_with_rag(broker_instance, rag_system, web_pipeline)
     
     except Exception as e:
