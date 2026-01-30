@@ -154,7 +154,7 @@ class CoordinatorRAGBridge:
     async def execute_action_task(
         self,
         task: ActionTask,
-        max_retries: int = 2,
+        max_retries: int = 3,
         enable_cache: bool = False,  # Enable cache by default
         cache_threshold: float = 0.85
     ) -> TaskResult:
@@ -376,7 +376,7 @@ async def start_execution_agent_with_rag(broker_instance, rag_system, sandbox_pi
             
             result = await bridge.execute_action_task(
                 task=task,
-                max_retries=2,
+                max_retries=3,
                 enable_cache=False  # Disable cache to avoid ChromaDB errors
             )
 
@@ -458,7 +458,7 @@ async def initialize_execution_agent_for_server(broker_instance):
         # Initialize RAG system
         try:
             logger.info("🔧 Initializing RAG system...")
-            rag_config = RAGConfig(library_name="pywinauto")
+            rag_config = RAGConfig(library_name="pyautogui",retrieval_mode="api",use_rag=False)
             rag_system = RAGSystem(rag_config)
             rag_system.initialize()
             logger.info("✅ RAG system ready")
