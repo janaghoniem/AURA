@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  rag-api:
+    build: .
+    container_name: rag-retrieval-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/data/models
+      - ./vectordb:/app/data/vectordb
+    depends_on:
+      - chroma-db
+
+  chroma-db:
+    image: chromadb/chroma:1.4.0
+    container_name: chroma-db
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./vectordb:/chroma/chroma

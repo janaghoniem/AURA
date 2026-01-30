@@ -21,6 +21,9 @@ import hashlib
 import ast
 import sys
 from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # %%
@@ -676,27 +679,27 @@ class ActionCache:
         self.cache_dir.mkdir(exist_ok=True)
         
         # ChromaDB for cache
-        # import chromadb
-        # self.client = chromadb.PersistentClient(path=str(self.cache_dir))
+        import chromadb
+        self.client = chromadb.PersistentClient(path=str(self.cache_dir))
         
-        # try:
-        #     self.collection = self.client.get_or_create_collection(
-        #         name="action_code_cache",
-        #         metadata={"hnsw:space": "cosine"}
-        #     )
-        # except:
-        #     self.collection = self.client.create_collection(
-        #         name="action_code_cache",
-        #         metadata={"hnsw:space": "cosine"}
-        #     )
+        try:
+            self.collection = self.client.get_or_create_collection(
+                name="action_code_cache",
+                metadata={"hnsw:space": "cosine"}
+            )
+        except:
+            self.collection = self.client.create_collection(
+                name="action_code_cache",
+                metadata={"hnsw:space": "cosine"}
+            )
         
         # Load embedding model
-        # from sentence_transformers import SentenceTransformer
-        # model_path = Path("models/pywinauto/embedding_model")
-        # if model_path.exists():
-        #     self.embedding_model = SentenceTransformer(str(model_path))
-        # else:
-        #     self.embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        from sentence_transformers import SentenceTransformer
+        model_path = Path("models/pywinauto/embedding_model")
+        if model_path.exists():
+            self.embedding_model = SentenceTransformer(str(model_path))
+        else:
+            self.embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
         
         print(f"Action cache initialized: {self.collection.count()} cached actions")
     
@@ -793,22 +796,37 @@ class ActionCache:
 # ============================================================================
 
 class SandboxExecutionPipeline:
-    """Complete pipeline for safe code execution - FIXED for server use"""
+    """Complete pipeline for safe code execution with optional caching"""
     
-    def __init__(self, config: SandboxConfig = None):
+    def __init__(self, config: SandboxConfig = None, enable_cache: bool = True):
+        """
+        Initialize sandbox pipeline
+        
+        Args:
+            config: Sandbox configuration
+            enable_cache: Whether to enable action cache (requires ChromaDB)
+        """
         self.config = config or SandboxConfig()
         self.security_validator = SecurityValidator()
         self.execution_validator = ExecutionValidator()
         self.local_sandbox = LocalSandbox(self.config)
         
-        # REMOVED: Action cache (causes ChromaDB errors in server environment)
-        # self.action_cache = ActionCache(self.config)
+        # Optional: Action cache (gracefully handle if unavailable)
+        self.action_cache = None
+        if enable_cache:
+            try:
+                logger.info("🔧 Initializing action cache...")
+                self.action_cache = ActionCache(self.config)
+                logger.info(f"✅ Action cache initialized: {self.action_cache.collection.count()} cached actions")
+            except Exception as e:
+                logger.warning(f"⚠️ Action cache not available: {e}")
+                logger.info("📝 Continuing without cache support")
         
         # Execution history
         self.execution_history = []
     
     def execute_code(self, code: str, 
-                    use_docker: bool = False,  # Changed default to False
+                    use_docker: bool = False,
                     expected_output: Optional[str] = None,
                     retry_on_failure: bool = True) -> ExecutionResult:
         """
@@ -927,8 +945,6 @@ class SandboxExecutionPipeline:
             'avg_execution_time': avg_time,
             'security_violations': sum(1 for r in self.execution_history if not r.security_passed)
         }
-
-
 
 # %%
 
@@ -1307,9 +1323,9 @@ def test_complete_rag_flow(rag_system=None, query: str=None):
 
 
 # %%
-os.environ["GOOGLE_API_KEY"]="AIzaSyBpxFiw_bTZZlTaKaVqcxrH8sgKkbmdr7s"
-os.environ["GROQ_API_KEY"]='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'
 
+
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 
 # %%

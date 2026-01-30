@@ -947,6 +947,17 @@ async def execute_single_task(
     # Wait for result
     try:
         result_payload = await asyncio.wait_for(future, timeout=60)
+        # FIX: Ensure task_id is in result_payload
+        if "task_id" not in result_payload:
+            logger.warning(f"⚠️ task_id missing in result, adding it: {task.task_id}")
+            result_payload["task_id"] = task.task_id
+        
+        # FIX: Validate required fields before creating TaskResult
+        if "status" not in result_payload:
+            logger.error(f"❌ Missing 'status' field in result: {result_payload}")
+            result_payload["status"] = "failed"
+            result_payload["error"] = "Invalid result format from agent"
+            
         return TaskResult(**result_payload)
     except asyncio.TimeoutError:
         logger.error(f"⏰ Task {task.task_id} timeout after 60 seconds")

@@ -7,8 +7,6 @@ from dotenv import load_dotenv
 
 # Groq & LangChain Imports
 from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
 
 # Project Utilities
 from agents.utils.protocol import Channels, AgentMessage, MessageType, AgentType
@@ -29,8 +27,7 @@ class ReasoningAgent:
             groq_api_key=GROQ_API_KEY
         )
         
-        # FIX: Properly escaped system prompt without template variables
-        self.system_prompt = """You are the REASONING AGENT — the cognitive brain of the AURA multi-agent system.
+        self.system_prompt = """You are the REASONING AGENT – the cognitive brain of the AURA multi-agent system.
 
 PURPOSE:
 You are responsible for all high-level intellectual processing inside AURA.
@@ -68,11 +65,14 @@ Your goal is correctness, clarity, and usefulness to the system."""
         ai_prompt = task_payload.get("ai_prompt", "Process the following content.")
         content = task_payload.get("content", "")
         extra_params = task_payload.get("extra_params", {})
+        
+        # FIX: Extract input_content if present
+        if "input_content" in extra_params:
+            content = extra_params["input_content"]
 
         try:
             logger.info(f"🧠 Reasoning Agent processing task: {ai_prompt[:50]}...")
             
-            # FIX: Use simple string prompt instead of template
             full_prompt = f"""{self.system_prompt}
 
 TASK: {ai_prompt}
@@ -84,7 +84,6 @@ EXTRA PARAMETERS: {json.dumps(extra_params)}
 
 Please respond with valid JSON only."""
 
-            # Call Groq directly without template
             response = await self.llm.ainvoke(full_prompt)
             response_text = response.content if hasattr(response, 'content') else str(response)
             logger.info("REASONING RESPONSE "+response_text)
@@ -127,20 +126,24 @@ async def start_reasoning_agent():
 
         # Process the logic
         result = await agent.process_reasoning_task(payload)
+        
+        # FIX: Add task_id to result payload
+        result["task_id"] = task_id
 
-        # Send response back to Coordinator - FIX: Use EXECUTION_RESPONSE not EXECUTION_RESULT
+        # Send response back to Coordinator
         response_msg = AgentMessage(
-            message_type=MessageType.EXECUTION_RESPONSE,  # CHANGED from EXECUTION_RESULT
+            message_type=MessageType.EXECUTION_RESPONSE,
             sender=AgentType.REASONING,
             receiver=AgentType.COORDINATOR,
             session_id=message.session_id,
             task_id=task_id,
             response_to=message.message_id,
-            payload=result
+            payload=result  # Now includes task_id
         )
 
         await broker.publish(Channels.REASONING_TO_COORDINATOR, response_msg)
         logger.info(f"📤 Sent reasoning result for task {task_id}")
+        logger.info(f"Content: {result}")
 
     # Subscribe to the reasoning channel
     broker.subscribe(Channels.COORDINATOR_TO_REASONING, handle_reasoning_request)
@@ -148,6 +151,6 @@ async def start_reasoning_agent():
     while True:
         await asyncio.sleep(1)
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(start_reasoning_agent())
+# if __name__ == "__main__":
+#     logging.basicConfig(level=logging.INFO)
+#     asyncio.run(start_reasoning_agent())

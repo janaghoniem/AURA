@@ -368,9 +368,30 @@ class CoordinatorRAGBridge:
             
             return code
     
+    async def execute_action_task(
+        self,
+        task: ActionTask,
+        max_retries: int = 3,
+        enable_cache: bool = False,  # Enable cache by default
+        cache_threshold: float = 0.85
+    ) -> TaskResult:
+        """
+        Execute a single ActionTask using RAG pipeline with cache support
+        
+        Args:
+            task: ActionTask from coordinator
+            max_retries: Maximum retry attempts
+            enable_cache: Whether to check/use cache
+            cache_threshold: Similarity threshold for cache hit (0.85 = 85%)
+            
+        Returns:
+            TaskResult for coordinator
+        """
+        logger.info(f"🔄 Processing task {task.task_id}: {task.ai_prompt[:50]}...")
     async def execute_action_task(self, task: ActionTask, max_retries: int = 1, enable_cache: bool = False) -> TaskResult:
         logger.info(f"🖥️ Processing DESKTOP task {task.task_id}: {task.ai_prompt[:50]}...")
         
+        # Only process action tasks
         if task.target_agent != "action":
             logger.warning(f"⚠️ Task {task.task_id} is not an action task, skipping RAG")
             return TaskResult(
@@ -379,8 +400,89 @@ class CoordinatorRAGBridge:
                 error="Not an action task - should be handled by reasoning agent"
             )
         
+        # Build enhanced query for RAG
         rag_query = self.adapter.build_rag_query(task)
         
+        # ========================================================================
+        # STEP 0: CHECK CACHE FIRST (if enabled and available)
+        # ========================================================================
+        if enable_cache and hasattr(self.sandbox, 'action_cache'):
+            try:
+                logger.info(f"🔍 Checking cache for task {task.task_id}...")
+                cached_action = self.sandbox.action_cache.search_cache(
+                    rag_query,  # Use enhanced query for better matching
+                    threshold=cache_threshold
+                )
+                
+                if cached_action:
+                    logger.info(f"✅ CACHE HIT! Similarity: {cached_action['similarity']:.2%}")
+                    logger.info(f"⚡ Skipping RAG + Sandbox - using validated code!")
+                    
+                    # Execute cached code directly (already validated)
+                    import subprocess
+                    import tempfile
+                    import sys
+                    import time
+                    
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                        f.write(cached_action['code'])
+                        temp_file = f.name
+                    
+                    try:
+                        start_time = time.time()
+                        result = subprocess.run(
+                            [sys.executable, temp_file],
+                            capture_output=True,
+                            text=True,
+                            timeout=30
+                        )
+                        execution_time = time.time() - start_time
+                        
+                        # Create execution result
+                        from agents.execution_agent.RAG.execution import ExecutionResult, ExecutionStatus
+                        from datetime import datetime
+                        import hashlib
+                        
+                        exec_result = ExecutionResult(
+                            status=ExecutionStatus.SUCCESS if result.returncode == 0 else ExecutionStatus.FAILED,
+                            exit_code=result.returncode,
+                            stdout=result.stdout,
+                            stderr=result.stderr,
+                            execution_time=execution_time,
+                            timestamp=datetime.now().isoformat(),
+                            validation_passed=True,  # Already validated when cached
+                            validation_errors=[],
+                            security_passed=True,    # Already validated when cached
+                            security_violations=[],
+                            code_hash=cached_action['metadata']['code_hash']
+                        )
+                        
+                        logger.info(f"✅ Cached code executed in {execution_time:.3f}s")
+                        
+                        # Convert to TaskResult
+                        return self.adapter.execution_result_to_task_result(task, exec_result)
+                        
+                    except Exception as e:
+                        logger.warning(f"⚠️ Cached code execution failed: {e}")
+                        logger.info("🔄 Falling back to RAG generation...")
+                        # Continue to RAG flow below
+                    finally:
+                        import os
+                        try:
+                            os.unlink(temp_file)
+                        except:
+                            pass
+                else:
+                    logger.info(f"❌ Cache miss - proceeding with RAG generation")
+                    
+            except Exception as cache_error:
+                logger.warning(f"⚠️ Cache check failed: {cache_error}")
+                logger.info("🔄 Proceeding with RAG generation...")
+                # Continue to RAG flow below
+        
+        # ========================================================================
+        # CACHE MISS OR DISABLED - FULL RAG + SANDBOX FLOW
+        # ========================================================================
         attempt = 0
         error_context = ""
         start_context_index = 0
@@ -389,15 +491,18 @@ class CoordinatorRAGBridge:
             attempt += 1
             logger.info(f"🔍 Attempt {attempt}/{max_retries} for task {task.task_id}")
             
+            # Build enhanced query with error context if retry
             enhanced_query = rag_query
             if error_context:
                 enhanced_query += f"\n\nPrevious attempt failed: {error_context}"
                 enhanced_query += "\nPlease provide an alternative approach."
             
             try:
+                # Step 1: Generate code using RAG
+                logger.info(f"🤖 Generating code with RAG...")
                 rag_result = self.rag.generate_code(
                     enhanced_query,
-                    cache_key=task.ai_prompt,
+                    cache_key=task.ai_prompt,  # Use original prompt for cache key
                     start_context_index=start_context_index,
                     num_contexts=self.rag.config.top_k
                 )
@@ -406,21 +511,48 @@ class CoordinatorRAGBridge:
                 
                 if not generated_code:
                     logger.warning(f"⚠️ No code generated for task {task.task_id}")
+                    
+                    if rag_result.get('contexts_used', 0) == 0:
+                        logger.error("❌ No more contexts available")
+                        break
+                    
                     start_context_index += self.rag.config.top_k
                     continue
                 
-                logger.debug(f"✅ Generated {len(generated_code)} chars of code")
+                logger.info(f"✅ Generated {len(generated_code)} chars of code")
+                logger.debug(f"Generated code preview: {generated_code[:200]}...")
                 
+                # Step 2: Execute in LOCAL sandbox
+                logger.info(f"🔧 Executing code in local sandbox...")
                 exec_result = self.sandbox.execute_code(
                     code=generated_code,
                     use_docker=False,
                     retry_on_failure=False
                 )
                 
+                # Step 3: Check execution result
                 if exec_result.validation_passed and exec_result.security_passed:
                     logger.info(f"✅ Task {task.task_id} completed successfully")
+                    
+                    # ============================================================
+                    # CACHE THE SUCCESSFUL RESULT (if cache enabled and available)
+                    # ============================================================
+                    if enable_cache and hasattr(self.sandbox, 'action_cache'):
+                        try:
+                            logger.info(f"💾 Caching validated action...")
+                            self.sandbox.action_cache.store_action(
+                                query=rag_query,  # Use enhanced query for better future matching
+                                code=generated_code,
+                                execution_result=exec_result
+                            )
+                            logger.info(f"✅ Action cached successfully")
+                        except Exception as cache_error:
+                            logger.warning(f"⚠️ Failed to cache action: {cache_error}")
+                            # Don't fail the task if caching fails
+                    
                     return self.adapter.execution_result_to_task_result(task, exec_result)
                 
+                # Execution failed - prepare for retry
                 logger.warning(f"⚠️ Execution failed (attempt {attempt})")
                 error_context = f"Errors: {', '.join(exec_result.validation_errors)}"
                 if exec_result.stderr:
@@ -484,12 +616,17 @@ class CoordinatorRAGBridge:
                         else:
                             logger.warning(f"❌ OmniParser couldn't find: '{element_desc}'")
                 
+                logger.debug(f"Error context for retry: {error_context}")
+                
                 start_context_index += self.rag.config.top_k
                 
             except Exception as e:
                 logger.error(f"❌ Exception during RAG execution: {e}")
+                import traceback
+                logger.debug(f"Traceback: {traceback.format_exc()}")
                 error_context = str(e)
         
+        # All retries exhausted
         logger.error(f"❌ Task {task.task_id} failed after {max_retries} attempts")
         return TaskResult(
             task_id=task.task_id,
@@ -608,11 +745,13 @@ async def start_execution_agent_with_rag(broker_instance, desktop_rag, sandbox_p
             
         except Exception as e:
             logger.error(f"❌ Error processing execution request: {e}")
+
+            task_id = message.task_id or getattr(message.payload, 'task_id', 'unknown')
             import traceback
             traceback.print_exc()
             
             error_result = TaskResult(
-                task_id=message.task_id or "unknown",
+                task_id=task_id,
                 status="failed",
                 error=str(e)
             )
@@ -658,13 +797,11 @@ async def initialize_execution_agent_for_server(broker_instance):
     try:
         # Desktop RAG System
         try:
-            logger.info("🔧 Initializing Desktop RAG system (pywinauto)...")
-            from agents.execution_agent.RAG.code_generation import RAGSystem, RAGConfig
-            
-            desktop_rag_config = RAGConfig(library_name="pywinauto")
-            desktop_rag = RAGSystem(desktop_rag_config)
-            desktop_rag.initialize()
-            logger.info("✅ Desktop RAG system ready")
+            logger.info("🔧 Initializing RAG system...")
+            rag_config = RAGConfig(library_name="pyautogui",retrieval_mode="api",use_rag=False)
+            rag_system = RAGSystem(rag_config)
+            rag_system.initialize()
+            logger.info("✅ RAG system ready")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Desktop RAG: {e}")
             logger.info("📦 Starting fallback execution agent...")
@@ -676,11 +813,37 @@ async def initialize_execution_agent_for_server(broker_instance):
             logger.info("🔧 Initializing Desktop sandbox pipeline...")
             from agents.execution_agent.RAG.execution import (
                 SandboxExecutionPipeline, 
-                SandboxConfig
+                SandboxConfig,
+                ActionCache
+                # LocalSandbox  # Make sure this is imported
             )
             
             sandbox_config = SandboxConfig(timeout_seconds=30)
-            sandbox_pipeline = SandboxExecutionPipeline(sandbox_config)
+            # Try to enable cache, but continue without it if it fails
+            enable_cache = False
+            try:
+                # Test if ChromaDB is available
+                import chromadb
+                logger.info( "📦 ChromaDB available - will attempt to enable action cache")
+            except ImportError:
+                logger.warning("⚠️ ChromaDB not available - disabling action cache")
+                enable_cache = False
+
+            # Initialize sandbox with optional cache
+            try:
+                sandbox_pipeline = SandboxExecutionPipeline(
+                    sandbox_config,
+                    enable_cache=enable_cache
+                )
+                
+                if hasattr(sandbox_pipeline, 'action_cache') and sandbox_pipeline.action_cache:
+                    logger.info(f"✅ Action cache enabled with {sandbox_pipeline.action_cache.collection.count()} cached actions")
+                else:
+                    logger.info("📝 Running without action cache")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize with cache: {e}")
+                # Fallback: create without cache
+                sandbox_pipeline = SandboxExecutionPipeline(sandbox_config, enable_cache=False)
             
             logger.info("✅ Desktop sandbox pipeline ready")
             

@@ -80,6 +80,11 @@ backend/conversations.jsonl
 /backend/agents/execution_agent/RAG/rag_data
 /backend/agents/execution_agent/RAG/sandbox_logs
 
+/backend/conversations.jsonl
+
+/backend/sandbox_logs
+/backend/action_cache
+
 backend/conversations.jsonl
 backend/conversations.jsonl
 
