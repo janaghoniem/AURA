@@ -101,6 +101,7 @@ function App() {
     setChatMode(false);
   };
 
+
   /* ---------- THINKING STEPS SIMULATION ---------- */
   const startThinkingSequence = async () => {
     setIsThinking(true);

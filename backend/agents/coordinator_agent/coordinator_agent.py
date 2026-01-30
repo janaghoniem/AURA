@@ -532,29 +532,36 @@ def create_coordinator_graph():
         device_type = raw_task.get("device_type", "desktop")
 
         # Retrieve user preferences
-        previous_execution_state = None
 
-        try:
-            from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
-            pref_mgr = get_preference_manager(user_id)
-            
-            if checkpointer and session_id:
-                try:
-                    checkpoint_data = await checkpointer.aget(
-                        config={"configurable": {"thread_id": session_id}}
-                    )
-                    if checkpoint_data and "execution_state" in checkpoint_data:
-                        previous_execution_state = checkpoint_data["execution_state"]
-                        logger.info(f"🔄 Found previous execution state")
-                except Exception as e:
-                    logger.debug(f"No previous execution state: {e}")
-            
-            preferences_context = pref_mgr.get_relevant_preferences(
-                str(raw_task.get("confirmation", "")), limit=5
-            )
-        except Exception as e:
-            logger.warning(f"⚠️ Could not retrieve preferences: {e}")
-            preferences_context = "No user preferences available"
+        # ✅ Check for previous execution state in checkpoint
+        previous_execution_state = None
+        if checkpointer and session_id:
+            try:
+                logger.info(f"🔍 Checking for previous execution state in session {session_id}")
+                
+                # Get the latest checkpoint
+                checkpoint_tuple = await checkpointer.aget_tuple(
+                    config={"configurable": {"thread_id": session_id}}
+                )
+                
+                if checkpoint_tuple and checkpoint_tuple.checkpoint:
+                    checkpoint_data = checkpoint_tuple.checkpoint
+                    
+                    # Check channel_values for execution_state
+                    if "channel_values" in checkpoint_data:
+                        channel_vals = checkpoint_data["channel_values"]
+                        if "execution_state" in channel_vals:
+                            previous_execution_state = channel_vals["execution_state"]
+                            logger.info(f"🔄 Found previous execution state:")
+                            logger.info(f"   Completed: {previous_execution_state.get('completed_task_ids', [])}")
+                            logger.info(f"   Failed at: {previous_execution_state.get('failed_task_id', 'none')}")
+                else:
+                    logger.debug(f"No checkpoint found for session {session_id}")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Could not retrieve checkpoint: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
 
         if previous_execution_state:
             execution_context = f"\n\n# PREVIOUS EXECUTION STATE\n"
@@ -600,24 +607,25 @@ def create_coordinator_graph():
         
         results = {}
         task_outputs = {}
-
+        #here
+        # ✅ Save checkpoint PROPERLY using LangGraph state
         if checkpointer and session_id:
             try:
-                execution_state={
+                # LangGraph automatically saves state when graph completes
+                # We just need to ensure state contains execution info
+                state["execution_state"] = {
                     "completed_task_ids": list(results.keys()),
-                    "failed_task_ids":task_queue.get_failed_index(),
-                    "remaining_tasks": [t.task_id for t in list(task_queue.current_queue)],
+                    "failed_task_id": next(
+                        (tid for tid, res in results.items() if res.status == "failed"), 
+                        None
+                    ),
+                    "total_tasks": len(tasks),
                     "timestamp": datetime.now().isoformat()
                 }
-                await checkpointer.aput(
-                    config={"configurable": {"thread_id": session_id}},
-                    checkpoint={"execution_state": execution_state},
-                    metadata = {"type": "task_progress"}
-                )
-                logger.info(f"💾 Saved task progress")
+                logger.info(f"💾 Prepared execution state for checkpoint: {len(results)} completed")
             except Exception as e:
-                logger.error(f"❌ Failed to save task progress: {e}") 
-        
+                logger.error(f"❌ Failed to prepare execution state: {e}")
+
         while task_queue.has_tasks():
             if task_queue.is_stopped:
                 logger.warning("⏹️ Execution stopped by user")
@@ -761,35 +769,61 @@ OUTPUT FORMAT (JSON array):
 If NO preferences, return: []
 
 Extract now:"""
-                
+                #here
                 extraction_response = await llm.ainvoke(extraction_prompt)
                 extraction_text = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
 
+                # Clean markdown and validate
                 extraction_text = extraction_text.strip()
-                if extraction_text.startswith("```"):
-                    extraction_text = extraction_text.split("```")[1]
-                    if extraction_text.startswith("json"):
-                        extraction_text = extraction_text[4:]
-
-                preferences_to_store = json.loads(extraction_text.strip())
                 
+                # Remove markdown code blocks
+                if extraction_text.startswith("```"):
+                    parts = extraction_text.split("```")
+                    if len(parts) >= 2:
+                        extraction_text = parts[1]
+                        if extraction_text.strip().startswith("json"):
+                            extraction_text = extraction_text.strip()[4:]
+                
+                extraction_text = extraction_text.strip()
+                
+                # Validate before parsing
+                if not extraction_text:
+                    logger.info("⚠️ No preferences extracted (empty response)")
+                    preferences_to_store = []
+                elif extraction_text == "[]":
+                    logger.info("⚠️ No preferences extracted (empty array)")
+                    preferences_to_store = []
+                else:
+                    try:
+                        preferences_to_store = json.loads(extraction_text)
+                        if not isinstance(preferences_to_store, list):
+                            logger.warning(f"⚠️ Invalid format (not array): {extraction_text[:100]}")
+                            preferences_to_store = []
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ JSON parse error: {e}")
+                        logger.error(f"❌ Raw text: {extraction_text[:200]}")
+                        preferences_to_store = []
                 if preferences_to_store and isinstance(preferences_to_store, list):
                     for pref_obj in preferences_to_store:
                         if pref_obj.get("confidence") in ["high", "medium"]:
-                            pref_mgr.add_preference(
-                                pref_obj["preference"],
+                            # Use safe method to prevent duplicates
+                            result = pref_mgr.add_preference_safe(
+                                preference=pref_obj["preference"],
                                 metadata={
                                     "category": pref_obj.get("category", "general"),
                                     "confidence": pref_obj.get("confidence", "medium"),
                                     "extracted_from": task_summary["original_request"]
-                                }
+                                },
+                                similarity_threshold=0.85  # 85% similarity = duplicate
                             )
-                            logger.info(f"💾 Stored preference: {pref_obj['preference']}")
-                
+                            if result:
+                                logger.info(f"💾 Stored NEW preference: {pref_obj['preference']}")
+                            else:
+                                logger.info(f"⏭️ Skipped duplicate preference")
                 conversation_context = f"User requested: {task_summary['original_request']}. "
                 conversation_context += f"Successfully completed {success_count} steps."
                 
-                pref_mgr.add_preference(
+                pref_mgr.add_preference_safe(
                     conversation_context,
                     metadata={
                         "category": "conversation_history",
@@ -1071,7 +1105,7 @@ async def start_coordinator_agent(broker_instance):
     broker_instance.subscribe(Channels.LANGUAGE_TO_COORDINATOR, handle_task_from_language)
     broker_instance.subscribe(Channels.EXECUTION_TO_COORDINATOR, handle_action_result)
     broker_instance.subscribe(Channels.REASONING_TO_COORDINATOR, handle_action_result)
-    broker_instance.subscribe(Channels.INTERRUPT_CONTROL, handle_interrupt_command)
+    # broker_instance.subscribe(Channels.INTERRUPT_CONTROL, handle_interrupt_command)
     broker_instance.subscribe(Channels.SESSION_CONTROL, handle_session_control)
     
     logger.info("✅ Coordinator Agent started with RAG action layer support")

@@ -1,6 +1,6 @@
 """
 Mem0 Integration for Long-Term Preference Management
-FIXED: Lowered threshold, added query expansion, improved retrieval
+FIXED: Lowered threshold, added query expansion, improved retrieval, UPDATE support
 """
 
 import os
@@ -70,6 +70,99 @@ class Mem0PreferenceManager:
         except Exception as e:
             logger.error(f"❌ Failed to store preference: {e}")
             return None
+
+    def add_preference_safe(self, preference: str, metadata: Optional[Dict] = None, 
+                        similarity_threshold: float = 0.85) -> Optional[str]:
+        """
+        Store preference only if no similar one exists
+        
+        Args:
+            preference: Preference text to store
+            metadata: Optional metadata
+            similarity_threshold: Minimum similarity to consider duplicate (0.85 = 85% similar)
+        
+        Returns:
+            Memory ID if stored, None if duplicate found or error
+        """
+        try:
+            # Check for existing similar preferences
+            similar_prefs = self.get_relevant_preferences(
+                query=preference,
+                limit=3,
+                min_score=similarity_threshold
+            )
+            
+            if similar_prefs:
+                logger.info(f"⚠️ Similar preference exists, skipping: {similar_prefs[0].get('memory', '')[:50]}...")
+                return None
+            
+            # No duplicates found, store it
+            return self.add_preference(preference, metadata)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed safe preference storage: {e}")
+            return None
+
+    def update_preference(self, old_memory_id: str, new_preference: str, metadata: Optional[Dict] = None) -> bool:
+        """
+        Update an existing preference by ID
+        
+        Args:
+            old_memory_id: ID of the memory to update
+            new_preference: New preference text
+            metadata: Updated metadata
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Delete old preference
+            self.memory.delete(memory_id=old_memory_id)
+            
+            # Add new one
+            result = self.add_preference(new_preference, metadata)
+            
+            logger.info(f"✅ Updated preference {old_memory_id} with new value")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to update preference: {e}")
+            return False
+
+    def find_and_update_preference(self, search_query: str, new_preference: str, metadata: Optional[Dict] = None, similarity_threshold: float = 0.7) -> bool:
+        """
+        Find similar preference and update it, or create new if not found
+        
+        Args:
+            search_query: Query to find similar preference
+            new_preference: New preference text to store
+            metadata: Metadata for the preference
+            similarity_threshold: Minimum similarity to consider a match
+        
+        Returns:
+            True if updated/created, False otherwise
+        """
+        try:
+            # Search for existing similar preference
+            similar = self.get_relevant_preferences(
+                query=search_query,
+                limit=3,
+                min_score=similarity_threshold
+            )
+            
+            if similar and len(similar) > 0:
+                # Update the most similar one
+                old_memory_id = similar[0].get('id') or similar[0].get('memory_id')
+                logger.info(f"🔄 Updating existing preference: {similar[0].get('memory', '')[:50]}...")
+                return self.update_preference(old_memory_id, new_preference, metadata)
+            else:
+                # No similar preference found, create new
+                logger.info(f"➕ Creating new preference: {new_preference[:50]}...")
+                result = self.add_preference(new_preference, metadata)
+                return result is not None
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to find and update preference: {e}")
+            return False
 
     def get_relevant_preferences(
         self, 
@@ -217,6 +310,11 @@ class Mem0PreferenceManager:
             formatted += f"{i}. {memory_text}\n"
         
         return formatted
+
+
+# ============================================================================
+# FACTORY FUNCTION (OUTSIDE THE CLASS)
+# ============================================================================
 
 # Factory function
 _preference_managers: Dict[str, Mem0PreferenceManager] = {}

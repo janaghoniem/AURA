@@ -32,14 +32,36 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
     }
   }, [activeSection]);
 
+  // ✅ ADD THIS AT THE TOP OF THE FILE (after imports, before component)
+  const API_BASE_URL = "";
+
+  // ✅ THEN UPDATE THE fetchMemoryStats FUNCTION
   const fetchMemoryStats = async () => {
     try {
       setLoading(true);
+      setStatusMessage(""); // Clear previous messages
+      
       const userId = localStorage.getItem("user_id") || "test_user";
       
+      console.log("📡 Fetching preferences from:", `${API_BASE_URL}/api/memory/preferences`);
+      
       // Get preference stats
-      const response = await fetch(`http://localhost:8000/api/memory/preferences?user_id=${userId}&limit=100`);
+      const response = await fetch(
+        `${API_BASE_URL}/api/memory/preferences?user_id=${userId}&limit=100`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
       const data = await response.json();
+      console.log("✅ Received data:", data);
       
       // Calculate stats
       const prefs = data.preferences || [];
@@ -54,17 +76,18 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
       });
       
       setPreferences(prefs);
+      setStatusMessage("✅ Memory stats loaded successfully");
       
     } catch (error) {
-      console.error("Failed to fetch memory stats:", error);
-      setStatusMessage("❌ Failed to load memory statistics");
+      console.error("❌ Failed to fetch memory stats:", error);
+      setStatusMessage(`❌ Failed to load memory: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const handleClearLongTermMemory = async () => {
-    if (!confirm("🚨 WARNING: This will DELETE ALL your learned preferences and personal information permanently. Your conversation history will remain. Are you sure?")) {
+    if (!window.confirm("🚨 WARNING: This will DELETE ALL your learned preferences and personal information permanently. Your conversation history will remain. Are you sure?")) {
       return;
     }
 
@@ -74,11 +97,24 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
       
       const userId = localStorage.getItem("user_id") || "test_user";
       
-      const response = await fetch(`http://localhost:8000/api/memory/clear-preferences?user_id=${userId}`, {
-        method: "DELETE",
-      });
+      console.log("📡 Clearing preferences for user:", userId);
+      
+      const response = await fetch(
+        `${API_BASE_URL}/api/memory/clear-preferences?user_id=${userId}`,
+        {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
       const result = await response.json();
+      console.log("✅ Clear result:", result);
       
       setStatusMessage(`✅ Long-term memory cleared! Deleted ${result.preferences_deleted} preferences.`);
       
@@ -86,8 +122,8 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
       await fetchMemoryStats();
       
     } catch (error) {
-      console.error("Clear memory failed:", error);
-      setStatusMessage("❌ Failed to clear memory");
+      console.error("❌ Clear memory failed:", error);
+      setStatusMessage(`❌ Failed to clear memory: ${error.message}`);
     } finally {
       setLoading(false);
     }
@@ -190,7 +226,7 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
 
             {activeSection === "memory" && (
               <div className="settings-section">
-                <h3 className="section-title">Memory</h3>
+                <h3 className="section-title">Long-Term Memory</h3>
                 <p style={{ fontSize: "14px", color: "rgba(255,255,255,0.7)", marginBottom: "20px" }}>
                   Your AI learns your preferences over time. This includes your name, app choices, and work patterns.
                 </p>
