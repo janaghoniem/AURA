@@ -411,7 +411,7 @@ class CoordinatorRAGBridge:
                 logger.info(f"🔍 Checking cache for task {task.task_id}...")
                 cached_action = self.sandbox.action_cache.search_cache(
                     rag_query,  # Use enhanced query for better matching
-                    threshold=cache_threshold
+                    # threshold=cache_threshold
                 )
                 
                 if cached_action:
@@ -797,10 +797,13 @@ async def initialize_execution_agent_for_server(broker_instance):
     try:
         # Desktop RAG System
         try:
+            logger.info("🔧 Initializing Desktop RAG system ..")
+            from agents.execution_agent.RAG.code_generation import RAGSystem, RAGConfig
+
             logger.info("🔧 Initializing RAG system...")
-            rag_config = RAGConfig(library_name="pyautogui",retrieval_mode="api",use_rag=False)
-            rag_system = RAGSystem(rag_config)
-            rag_system.initialize()
+            desktop_rag_config = RAGConfig(library_name="pyautogui",retrieval_mode="api",use_rag=False)
+            desktop_rag = RAGSystem(desktop_rag_config)
+            desktop_rag.initialize()
             logger.info("✅ RAG system ready")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Desktop RAG: {e}")
