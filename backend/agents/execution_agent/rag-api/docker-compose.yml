@@ -1,26 +1,21 @@
-version: '3.8'
+version: "3.8"
 
 services:
   rag-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: rag-retrieval-api
     ports:
       - "8000:8000"
     volumes:
-      # Mount data directories
-      - ./vectordbb:/app/data/vectordb:ro  # Read-only
-      - ./modelss:/app/data/models:ro      # Read-only
-    environment:
-      - LOG_LEVEL=INFO
-      - PYTHONUNBUFFERED=1
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 4G
-        reservations:
-          cpus: '1.0'
-          memory: 2G
+      - ./models:/app/data/models
+      - ./vectordb:/app/data/vectordb
+    depends_on:
+      - chroma-db
+
+  chroma-db:
+    image: chromadb/chroma:1.4.0
+    container_name: chroma-db
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./vectordb:/chroma/chroma

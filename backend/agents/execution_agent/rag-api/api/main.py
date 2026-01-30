@@ -9,6 +9,11 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 from pathlib import Path
 import logging
+    
+from chromadb import Client
+from chromadb.config import Settings
+from fastapi import HTTPException
+import chromadb
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,35 +81,59 @@ class RAGRetrievalService:
         self.models_base = Path("/app/data/models")
         
         logger.info("RAG Retrieval Service initialized")
-    
+
+
     def _get_client(self, library_name: str):
-        """Get or create ChromaDB client for library"""
         if library_name not in self.clients:
             vectordb_path = self.vectordb_base / library_name
-            
+
             if not vectordb_path.exists():
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Vector database for '{library_name}' not found"
+                    detail=f"Vector database for '{library_name}' not found at {vectordb_path}"
                 )
-            
-            logger.info(f"Connecting to {library_name} vector database...")
-            client = chromadb.PersistentClient(path=str(vectordb_path))
-            
+
+            logger.info(f"Connecting to {library_name} vector database at {vectordb_path}...")
+
             try:
-                collection = client.get_collection(f"{library_name}_embeddings")
+                client = chromadb.PersistentClient(path=str(vectordb_path))
+                
+                # ✅ List collections first to debug
+                collections = client.list_collections()
+                logger.info(f"Available collections: {[c.name for c in collections]}")
+                
+                collection_name = f"{library_name}_embeddings"
+                
+                # ✅ Use list_collections() result instead of get_collection()
+                collection = None
+                for c in collections:
+                    if c.name == collection_name:
+                        collection = c
+                        break
+                
+                if collection is None:
+                    raise ValueError(
+                        f"Collection '{collection_name}' not found. "
+                        f"Available: {[c.name for c in collections]}"
+                    )
+                
                 self.clients[library_name] = {
-                    'client': client,
-                    'collection': collection
+                    "client": client,
+                    "collection": collection
                 }
-                logger.info(f"✅ Connected to {library_name} ({collection.count()} docs)")
+                
+                logger.info(f"✅ Connected to {collection_name} ({collection.count()} docs)")
+                
             except Exception as e:
+                logger.error(f"ChromaDB connection failed: {e}")
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to load collection: {str(e)}"
                 )
-        
+
         return self.clients[library_name]
+
+
     
     def _get_model(self, library_name: str):
         """Get or load embedding model for library"""
