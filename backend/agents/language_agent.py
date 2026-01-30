@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-language_agent.py - GROQ API VERSION - FIXED JSON PARSING
+language_agent.py - GROQ API VERSION - DYNAMIC PREFERENCE EXTRACTION
 """
 
 import os, re, json, uuid, time, sys
@@ -73,6 +73,12 @@ SYSTEM_PROMPT = """You are a Conversational Clarity Agent. Your role is to deter
 ### GOAL
 Gather missing details for vague tasks. If a task is clear or uses common apps (Notepad, Calculator, Chrome, etc.), mark it complete immediately using sensible defaults.
 
+### MEMORY USAGE RULES (CRITICAL)
+1. If user preferences are provided in a "IMPORTANT USER INFORMATION" message, YOU MUST USE THEM.
+2. When asked "what is my name?", check the preferences first.
+3. When asked about Moodle, email, or personal info, check the preferences first.
+4. NEVER say "I don't have information" if the answer exists in the user preferences.
+
 ### OPERATIONAL RULES
 1. NEVER execute tasks or describe steps.
 2. If the user asks a question (e.g., "What is AI?"), answer it briefly.
@@ -105,6 +111,101 @@ You must output ONLY a JSON object with this exact structure. NO BACKSLASHES IN 
   Output: {"is_complete": true, "response_text": "I'll summarize that file for you.", "original_task": "summarize the content of the file C:/Users/uscs/Downloads/coordinator to do.txt"}
 
 ### TASK TO CLASSIFY:"""
+
+# -----------------------
+# DYNAMIC PREFERENCE EXTRACTION
+# -----------------------
+async def extract_preferences_from_input(user_input: str, pref_mgr) -> None:
+    """
+    Use LLM to dynamically extract ANY preference from user input
+    
+    This replaces hardcoded regex patterns with intelligent extraction
+    """
+    try:
+        extraction_prompt = f"""You are a preference extraction agent. Analyze the user's message and extract ANY personal preferences, information, or settings they mention.
+
+USER MESSAGE:
+"{user_input}"
+
+EXTRACT:
+- Personal info (name, email, username, age, location, etc.)
+- App preferences (favorite browser, text editor, etc.)
+- Workflow preferences (how they like tasks done)
+- Settings (language, theme, format preferences)
+- ANY other information the user provides about themselves
+
+OUTPUT FORMAT (JSON array):
+[
+  {{
+    "search_query": "short query to find similar existing preference (e.g., 'user name', 'browser preference')",
+    "preference": "clear statement of the preference (e.g., 'User's name is John', 'User prefers Chrome for browsing')",
+    "category": "personal_info | app_usage | workflow | settings"
+  }}
+]
+
+RULES:
+1. Only extract if user is PROVIDING information (not asking questions)
+2. Each preference should be a complete statement
+3. search_query should be generic (to find/update existing similar preferences)
+4. If NO preferences found, return: []
+
+Extract now:"""
+
+        messages = [{"role": "user", "content": extraction_prompt}]
+        response = call_groq_api(messages, max_tokens=300)
+        
+        # Clean markdown
+        response = response.strip()
+        if response.startswith("```"):
+            parts = response.split("```")
+            if len(parts) >= 2:
+                response = parts[1]
+                if response.strip().startswith("json"):
+                    response = response.strip()[4:]
+        
+        response = response.strip()
+        
+        # Parse and store preferences
+        if response == "[]":
+            logger.info("ℹ️ No preferences extracted from input")
+            return
+        
+        preferences_to_store = json.loads(response)
+        
+        if not isinstance(preferences_to_store, list):
+            logger.warning(f"⚠️ Invalid extraction format: {response[:100]}")
+            return
+        
+        # Store each extracted preference
+        for pref_obj in preferences_to_store:
+            search_query = pref_obj.get("search_query", "")
+            preference = pref_obj.get("preference", "")
+            category = pref_obj.get("category", "general")
+            
+            if preference and search_query:
+                logger.info(f"🔍 Extracted preference: {preference}")
+                
+                # Use find_and_update to replace old preferences
+                success = pref_mgr.find_and_update_preference(
+                    search_query=search_query,
+                    new_preference=preference,
+                    metadata={
+                        "category": category,
+                        "source": "user_input",
+                        "timestamp": time.time()
+                    },
+                    similarity_threshold=0.7  # 70% similar = update
+                )
+                
+                if success:
+                    logger.info(f"💾 Stored/Updated: {preference[:50]}...")
+                else:
+                    logger.warning(f"⚠️ Failed to store preference")
+    
+    except json.JSONDecodeError as e:
+        logger.warning(f"⚠️ Preference extraction JSON error: {e}")
+    except Exception as e:
+        logger.error(f"❌ Preference extraction failed: {e}")
 
 # -----------------------
 # Agent - CONVERSATIONAL CLARITY ONLY
@@ -237,13 +338,42 @@ class TaskCoordinationAgent:
             logger.warning(f"⚠️ Failed to parse response: {e}")
             return "I'm sorry, I didn't quite understand. Could you clarify?", False
 
-    def user_turn(self, user_text: str) -> tuple:
-        """Process user input and return response"""
+    def user_turn(self, user_text: str, memory_context: str = None) -> tuple:
+        """Process user input and return response - WITH MEMORY SUPPORT"""
         user_text = sanitize_text(user_text)
+        
+        # ✅ FIX: Inject memory BEFORE adding user message
+        if memory_context:
+            memory_msg = {
+                "role": "system",
+                "content": f"""IMPORTANT USER INFORMATION (USE THIS TO ANSWER QUESTIONS):
+
+{memory_context}
+
+You MUST use this information when the user asks about themselves."""
+            }
+            
+            # Remove old memory injections
+            self.memory = [
+                msg for msg in self.memory 
+                if "IMPORTANT USER INFORMATION" not in msg.get("content", "")
+            ]
+            
+            # Insert after system prompt
+            if len(self.memory) > 0 and self.memory[0].get("role") == "system":
+                self.memory.insert(1, memory_msg)
+            else:
+                self.memory.insert(0, memory_msg)
+        
+        # NOW add the user message
         self.memory.append({"role": "user", "content": user_text})
         
-        if len(self.memory) > 21:
-            self.memory = [self.memory[0]] + self.memory[-20:]
+        # Trim if too long (keep system + memory + last 20)
+        if len(self.memory) > 23:
+            # Keep system prompt + memory context + last 20 messages
+            system_messages = [msg for msg in self.memory if msg.get("role") == "system"]
+            other_messages = [msg for msg in self.memory if msg.get("role") != "system"]
+            self.memory = system_messages + other_messages[-20:]
         
         print("   🤔 Thinking...", end=" ", flush=True)
         response = call_groq_api(self.memory, max_tokens=200)
@@ -296,7 +426,7 @@ async def start_language_agent(broker):
         print(f"📝 User said: {input_text}")
         print(f"📱 Device type: {device_type}")
 
-        user_id = payload_data.get("user_id", "default_user")
+        user_id = payload_data.get("user_id", "test_user")
         session_id = message.session_id if hasattr(message, 'session_id') else "default_session"
         http_request_id = message.message_id if hasattr(message, 'message_id') else str(uuid.uuid4())
 
@@ -317,7 +447,7 @@ async def start_language_agent(broker):
             from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
             pref_mgr = get_preference_manager(user_id)
             
-            all_memories = pref_mgr.get_relevant_preferences(input_text, limit=10)
+            all_memories = pref_mgr.get_relevant_preferences(input_text, limit=5)
             
             preferences = []
             conversation_history = []
@@ -341,37 +471,35 @@ async def start_language_agent(broker):
             
             if preferences:
                 context_parts.append("# USER PREFERENCES")
-                for i, pref in enumerate(preferences[:5], 1):
+                for i, pref in enumerate(preferences[:3], 1):
                     context_parts.append(f"{i}. {pref}")
             
             if conversation_history:
                 context_parts.append("\n# RECENT CONVERSATIONS")
-                for i, conv in enumerate(conversation_history[:3], 1):
+                for i, conv in enumerate(conversation_history[:2], 1):
                     context_parts.append(f"{i}. {conv}")
             
             memory_context = "\n".join(context_parts) if context_parts else "No previous context."
             
             print(f"🧠 Retrieved Memory Context:\n{memory_context}\n")
             
-            if context_parts:
-                has_preferences = any(
-                    msg.get("role") == "system" and "Previous Context" in msg.get("content", "")
-                    for msg in agent.memory
-                )
-                
-                if not has_preferences:
-                    agent.memory.insert(1, {
-                        "role": "system", 
-                        "content": f"Previous Context:\n{memory_context}"
-                    })
-                    logger.info("✅ Injected Mem0 context into conversation")
+            logger.info(f"📊 Current memory structure: {[m.get('role') for m in agent.memory[:3]]}")
+            
+            # ✅ DYNAMIC PREFERENCE EXTRACTION (replaces hardcoded regex)
+            logger.info("="*60)
+            logger.info("🔍 EXTRACTING PREFERENCES FROM USER INPUT...")
+            await extract_preferences_from_input(input_text, pref_mgr)
+            logger.info("="*60)
+            
         except Exception as e:
-            logger.error(f"❌ Failed to fetch memory: {e}")
+            logger.error(f"❌ Failed to fetch/extract memory: {e}")
+            memory_context = "No previous context."
 
         # NEW: Send thinking update before calling agent
         await ThinkingStepManager.update_step(session_id, "Processing your request...", http_request_id)
 
-        response, is_complete = agent.user_turn(input_text)
+        # Pass memory context to user_turn
+        response, is_complete = agent.user_turn(input_text, memory_context=memory_context)
         print(f"🤖 Agent: {response}\n")
         
         if is_complete:
@@ -382,10 +510,12 @@ async def start_language_agent(broker):
                 message_type=MessageType.TASK_REQUEST,
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.COORDINATOR,
+                session_id=session_id,
                 response_to=http_request_id,
                 payload={
                     "confirmation": response, 
-                    "device_type": device_type
+                    "device_type": device_type,
+                    "user_id": user_id,
                 }
             )
             await broker.publish(Channels.LANGUAGE_TO_COORDINATOR, task_msg)

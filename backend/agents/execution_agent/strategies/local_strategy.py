@@ -256,13 +256,17 @@ class LocalStrategy:
     
     # ==================== ELEMENT INTERACTION ACTIONS ====================
     
+
     def _click_element(self, task: ExecutionTask, logs: List, start_time: float) -> ExecutionResult:
-        """Click UI element with multi-strategy fallback"""
+        """Click UI element with multi-strategy fallback INCLUDING OmniParser"""
         element_desc = task.params.get("element", {})
         
         logs.append("Attempting to locate element")
         
-        # Strategy 1: Try UIA (if window_title provided)
+        # ========================================================================
+        # STRATEGY 1: Try UIA (if window_title provided)
+        # ========================================================================
+        window = None
         if PYWINAUTO_AVAILABLE and element_desc.get("window_title"):
             try:
                 app = Application(backend='uia').connect(title_re=f".*{element_desc['window_title']}.*")
@@ -271,78 +275,151 @@ class LocalStrategy:
                 vision_result = self.vision.detect_element_uia(window, element_desc)
                 
                 if vision_result.element_found:
-                    logs.append(f"Element found via UIA")
+                    logs.append(f"✓ Element found via UIA")
                     if self.action.click(vision_result.coordinates):
-                        logs.append("Click successful")
+                        logs.append("✓ Click successful")
                         return self._create_success_result(task, logs, start_time, "Element clicked via UIA")
             except Exception as e:
-                logs.append(f"UIA method failed: {e}")
+                logs.append(f"⚠️ UIA method failed: {e}")
         
-        # Strategy 2: Try OCR (if text provided)
+        # ========================================================================
+        # STRATEGY 2: Try OCR (if text provided)
+        # ========================================================================
         if element_desc.get("text"):
-            logs.append("Falling back to OCR detection")
+            logs.append("⚠️ Falling back to OCR detection")
             vision_result = self.vision.detect_element_ocr(element_desc["text"])
             
             if vision_result.element_found and vision_result.confidence > Config.OCR_CONFIDENCE_THRESHOLD:
-                logs.append(f"Element found via OCR (confidence: {vision_result.confidence:.2f})")
+                logs.append(f"✓ Element found via OCR (confidence: {vision_result.confidence:.2f})")
                 if self.action.click(vision_result.coordinates):
-                    logs.append("Click successful")
+                    logs.append("✓ Click successful")
                     return self._create_success_result(task, logs, start_time, "Element clicked via OCR")
         
-        # Strategy 3: Try template matching (if image_path provided)
+        # ========================================================================
+        # STRATEGY 3: Try Computer Vision (if image_path provided)
+        # ========================================================================
         if element_desc.get("image_path"):
-            logs.append("Falling back to Computer Vision")
+            logs.append("⚠️ Falling back to Computer Vision")
             vision_result = self.vision.detect_element_image(element_desc["image_path"])
             
             if vision_result.element_found:
-                logs.append("Element found via CV")
+                logs.append("✓ Element found via CV")
                 if self.action.click(vision_result.coordinates):
-                    logs.append("Click successful")
+                    logs.append("✓ Click successful")
                     return self._create_success_result(task, logs, start_time, "Element clicked via CV")
         
-        # All strategies failed
+        # ========================================================================
+        # STRATEGY 4: OMNIPARSER FALLBACK (NEW!)
+        # ========================================================================
+        logs.append("⚠️⚠️⚠️ All standard methods failed - ACTIVATING OMNIPARSER FALLBACK")
+        
+        # Try OmniParser as last resort
+        search_text = element_desc.get("text") or element_desc.get("title") or element_desc.get("auto_id")
+        
+        if search_text:
+            logs.append(f"🔍 OmniParser searching for: '{search_text}'")
+            
+            try:
+                vision_result = self.vision.detect_element_omniparser(search_text)
+                
+                if vision_result.element_found:
+                    logs.append(f"✅✅✅ OMNIPARSER SUCCESS! Found '{vision_result.detected_text}' at {vision_result.coordinates}")
+                    
+                    if self.action.click(vision_result.coordinates):
+                        logs.append("✅ Click successful via OmniParser")
+                        return self._create_success_result(
+                            task, logs, start_time, 
+                            f"Element clicked via OMNIPARSER FALLBACK: {vision_result.detected_text}"
+                        )
+            except Exception as e:
+                logs.append(f"❌ OmniParser also failed: {e}")
+        else:
+            logs.append("❌ No text/title provided for OmniParser fallback")
+        
+        # ========================================================================
+        # ALL STRATEGIES FAILED (including OmniParser)
+        # ========================================================================
         screenshot = self.vision.capture_screen()
+        logs.append("❌❌❌ COMPLETE FAILURE: UIA → OCR → CV → OmniParser all failed")
+        
         return ExecutionResult(
             status=ActionStatus.FAILED.value,
             task_id=task.task_id,
             context=task.context,
             action="click_element",
-            details="Element not found with any detection method",
+            details="Element not found after exhausting all detection methods (UIA, OCR, CV, OmniParser)",
             logs=logs,
             timestamp=datetime.now().isoformat(),
             duration=time.time() - start_time,
-            error="Element not found",
+            error="Element not found - all fallback strategies exhausted",
             screenshot_path=screenshot
         )
-    
+
+
     def _double_click_element(self, task: ExecutionTask, logs: List, start_time: float) -> ExecutionResult:
-        """Double-click UI element"""
+        """Double-click UI element with OmniParser fallback"""
         element_desc = task.params.get("element", {})
         
         logs.append("Attempting to locate element for double-click")
         
-        # Try OCR first
+        # ========================================================================
+        # STRATEGY 1: Try OCR
+        # ========================================================================
         if element_desc.get("text"):
             vision_result = self.vision.detect_element_ocr(element_desc["text"])
             
             if vision_result.element_found and vision_result.confidence > Config.OCR_CONFIDENCE_THRESHOLD:
-                logs.append(f"Element found via OCR")
+                logs.append(f"✓ Element found via OCR")
                 if self.action.double_click(vision_result.coordinates):
-                    logs.append("Double-click successful")
+                    logs.append("✓ Double-click successful")
                     return self._create_success_result(task, logs, start_time, "Element double-clicked")
         
-        # Try image matching
+        # ========================================================================
+        # STRATEGY 2: Try Computer Vision
+        # ========================================================================
         if element_desc.get("image_path"):
+            logs.append("⚠️ Falling back to CV")
             vision_result = self.vision.detect_element_image(element_desc["image_path"])
             
             if vision_result.element_found:
-                logs.append("Element found via CV")
+                logs.append("✓ Element found via CV")
                 if self.action.double_click(vision_result.coordinates):
-                    logs.append("Double-click successful")
+                    logs.append("✓ Double-click successful")
                     return self._create_success_result(task, logs, start_time, "Element double-clicked")
         
-        return self._create_error_result(task, logs, start_time, "Element not found for double-click")
-    
+        # ========================================================================
+        # STRATEGY 3: OMNIPARSER FALLBACK
+        # ========================================================================
+        logs.append("⚠️⚠️ OCR & CV failed - ACTIVATING OMNIPARSER for double-click")
+        
+        search_text = element_desc.get("text") or element_desc.get("title")
+        
+        if search_text:
+            logs.append(f"🔍 OmniParser searching for: '{search_text}'")
+            
+            try:
+                vision_result = self.vision.detect_element_omniparser(search_text)
+                
+                if vision_result.element_found:
+                    logs.append(f"✅ OMNIPARSER found element at {vision_result.coordinates}")
+                    
+                    if self.action.double_click(vision_result.coordinates):
+                        logs.append("✅ Double-click successful via OmniParser")
+                        return self._create_success_result(
+                            task, logs, start_time, 
+                            "Element double-clicked via OMNIPARSER FALLBACK"
+                        )
+            except Exception as e:
+                logs.append(f"❌ OmniParser failed: {e}")
+        
+        # ========================================================================
+        # ALL STRATEGIES FAILED
+        # ========================================================================
+        return self._create_error_result(
+            task, logs, start_time, 
+            "Element not found for double-click (OCR → CV → OmniParser all failed)"
+        )
+
     # ==================== TEXT INPUT ACTIONS ====================
     
     def _type_text(self, task: ExecutionTask, logs: List, start_time: float) -> ExecutionResult:

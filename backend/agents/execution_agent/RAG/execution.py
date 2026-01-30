@@ -70,11 +70,10 @@ class SandboxConfig:
     max_retry_attempts: int = 1
     
     # Paths
-    sandbox_dir: Path = Path("sandbox_workspace")
     logs_dir: Path = Path("sandbox_logs")
     
     def __post_init__(self):
-        self.sandbox_dir.mkdir(exist_ok=True)
+        # self.sandbox_dir.mkdir(exist_ok=True)
         self.logs_dir.mkdir(exist_ok=True)
 
 @dataclass

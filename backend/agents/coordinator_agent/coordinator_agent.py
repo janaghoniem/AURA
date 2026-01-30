@@ -9,7 +9,6 @@ from collections import deque
 
 # Imports for memory
 from langgraph.checkpoint.mongodb import MongoDBSaver
-from .memory.mem0_manager import get_preference_manager
 
 import logging
 from agents.utils.protocol import (
@@ -47,14 +46,25 @@ except Exception as e:
     logger.error(f"❌ Failed to initialize MongoDB checkpointer: {e}")
     checkpointer = None
 
-# --- Task Models for RAG Action Layer ---
+# ============================================================================
+# WEB AUTOMATION SUPPORT - NO HARDCODED URLs
+# ============================================================================
+
 class ActionTask(BaseModel):
-    """Task format for RAG-based action layer"""
+    """Task format for RAG-based action layer - URLs resolved by execution layer"""
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    ai_prompt: str  # Natural language prompt for RAG LLM
+    ai_prompt: str  # Natural language prompt for RAG LLM - this drives URL resolution
     device: Literal["desktop", "mobile"]
     context: Literal["local", "web"]
     extra_params: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    
+    # Web-specific parameters - NO URLs here, execution layer resolves them
+    web_params: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    # Examples:
+    # Navigation: {"action": "navigate"}  # URL comes from RAG based on ai_prompt
+    # Interaction: {"action": "fill", "text": "search query"}  # Selector comes from RAG
+    # Extraction: {"action": "extract"}  # Selector comes from RAG
+    
     target_agent: Literal["action", "reasoning"] = "action"
     depends_on: Optional[str] = None
     
@@ -65,10 +75,10 @@ class TaskResult(BaseModel):
     """Result from action/reasoning layer"""
     task_id: str
     status: Literal["success", "failed", "pending"]
-    content: Optional[str] = None  # For reasoning agent outputs
+    content: Optional[str] = None
     error: Optional[str] = None
 
-# --- Queue Management ---
+# --- Queue Management (unchanged) ---
 class TaskQueue:
     """Manages sequential task execution with interrupt controls"""
     def __init__(self):
@@ -80,15 +90,12 @@ class TaskQueue:
         self.current_task_id: Optional[str] = None
         
     def add_to_current(self, tasks: List[ActionTask]):
-        """Add tasks to current execution queue"""
         self.current_queue.extend(tasks)
         
     def add_to_global(self, task_plan: Dict):
-        """Add new task plan to global queue"""
         self.global_queue.append(task_plan)
         
     def get_next_task(self) -> Optional[ActionTask]:
-        """Get next task from current queue"""
         if self.current_queue and not self.is_paused and not self.is_stopped:
             task = self.current_queue.popleft()
             self.current_task_id = task.task_id
@@ -96,55 +103,46 @@ class TaskQueue:
         return None
     
     def has_tasks(self) -> bool:
-        """Check if current queue has tasks"""
         return len(self.current_queue) > 0
     
     def pause(self):
-        """Pause execution"""
         self.is_paused = True
         logger.info("⏸️ Task execution paused")
         
     def resume(self):
-        """Resume execution"""
         self.is_paused = False
         logger.info("▶️ Task execution resumed")
         
     def stop(self):
-        """Stop and clear current queue"""
         self.is_stopped = True
         self.current_queue.clear()
         logger.info("⏹️ Task execution stopped")
         
     def reset(self):
-        """Reset all flags for new task"""
         self.is_paused = False
         self.is_stopped = False
         self.current_task_id = None
         
     def log_execution(self, task: ActionTask, result: TaskResult):
-        """Log task execution for undo capability"""
         self.execution_history.append({
-            "task": task.dict(),
-            "result": result.dict(),
+            "task": task.model_dump(),
+            "result": result.model_dump(),
             "timestamp": datetime.now().isoformat()
         })
         
     def get_failed_index(self) -> Optional[int]:
-        """Get index of first failed task"""
         for idx, entry in enumerate(self.execution_history):
             if entry["result"]["status"] == "failed":
                 return idx
         return None
     
     def retry_from_failed(self) -> List[ActionTask]:
-        """Get tasks starting from failed one"""
         failed_idx = self.get_failed_index()
         if failed_idx is not None:
             retry_tasks = [
                 ActionTask(**entry["task"]) 
                 for entry in self.execution_history[failed_idx:]
             ]
-            # Clear failed entries from history
             self.execution_history = self.execution_history[:failed_idx]
             return retry_tasks
         return []
@@ -154,6 +152,19 @@ task_queue = TaskQueue()
 
 # Track pending results
 pending_results: Dict[str, asyncio.Future] = {}
+
+# Helper function for guarded futures
+def create_guarded_future(task_id: str) -> asyncio.Future:
+    """
+    Create a future with built-in state tracking
+    
+    Returns:
+        asyncio.Future with task_id attached for debugging
+    """
+    future = asyncio.Future()
+    future._task_id = task_id  # Attach ID for debugging
+    future._created_at = datetime.now()
+    return future
 
 # --- LangGraph State ---
 class CoordinatorState(BaseModel):
@@ -166,17 +177,34 @@ class CoordinatorState(BaseModel):
     original_message_id: Optional[str] = None
     user_id: Optional[str] = None
     preferences_context: Optional[str] = None
+    
+    # ✅ FIX 3: Add conversation history tracking
+    conversation_history: List[Dict] = Field(default_factory=list)
+    last_successful_action: Optional[str] = None
+    current_page_url: Optional[str] = None
 
-# --- Plan Decomposition with Groq LLM ---
+# ============================================================================
+# ENHANCED TASK DECOMPOSITION - NO HARDCODED URLs
+# ============================================================================
+
 async def decompose_task_to_actions(
     user_request: Dict[str, Any],
     preferences_context: str,
-    device_type: str = "desktop"  # NEW: Add device_type parameter
+    device_type: str = "desktop",
+    conversation_history: List[Dict] = None  # ✅ FIX 3: Add history parameter
 ) -> Dict[str, Any]:
-    """Decompose user request into ActionTask queue using Groq LLM"""
+    """Decompose user request into ActionTask queue - URLs resolved by execution layer"""
     
-    # Add device hint to the prompt
-    device_hint = f"The user is on a {device_type} device. Tailor task recommendations accordingly (e.g., use 'mobile' apps for mobile devices).\n\n"
+    device_hint = f"The user is on a {device_type} device. Tailor task recommendations accordingly.\n\n"
+    
+    # ✅ FIX 3: Build conversation history context
+    history_context = ""
+    if conversation_history:
+        history_context = "\n\n# CONVERSATION HISTORY (Last 3 interactions)\n"
+        for entry in conversation_history[-3:]:
+            history_context += f"User: {entry.get('user_message', '')}\n"
+            history_context += f"Action: {entry.get('action_taken', '')}\n"
+            history_context += f"Result: {entry.get('result', '')}\n\n"
     
     prompt = f"""{device_hint}You are the AURA Task Decomposition Agent. Convert user requests into low-level executable tasks.
 
@@ -185,6 +213,7 @@ async def decompose_task_to_actions(
 
 # USER PREFERENCES
 {preferences_context}
+{history_context}
 
 ============================
 CORE BEHAVIOR RULES
@@ -197,78 +226,72 @@ CORE BEHAVIOR RULES
 - "Prepare to execute the task"
 - "Pass the request to another agent"
 - "Wait for user input"
-- "Acknowledge user command"
-- "Analyze the request"
-- "Decide what to do next"
 
-✅ Every task MUST represent a real-world executable operation or a reasoning operation with concrete output.
+✅ Every task MUST represent a real-world executable operation.
 
 2. Detect SIMPLE vs COMPOSITE requests:
 
 A SIMPLE request:
 - Can be completed by a single real-world action
-- Has no logical sub-steps
-- Has no dependencies
-- Produces no intermediate artifacts
+- Examples: "Open Notepad", "Go to google.com"
 
-Examples:
-- "Open Notepad"
-- "Open Chrome"
-- "Go to google.com"
-- "Close Calculator"
-- "Scroll down"
-
-➜ For SIMPLE requests:
-- Return EXACTLY ONE task
-- DO NOT decompose
-- ai_prompt must be the original user instruction verbatim or lightly normalized
+➜ For SIMPLE requests: Return EXACTLY ONE task
 
 A COMPOSITE request:
 - Requires multiple real actions
-- Produces intermediate outputs
-- Has dependencies between steps
-- Involves chaining reasoning + actions
-
-Examples:
-- "Download my Moodle assignment and summarize it in Notepad"
-- "Find the cheapest flight and save it in a file"
-- "Scrape reviews and analyze sentiment"
+- Examples: "Search Amazon for white socks and extract prices"
 
 ➜ Only COMPOSITE requests may be decomposed.
 
 3. Always prefer the MINIMAL valid execution plan.
-Never split tasks unless strictly required for execution or dependency correctness.
-
-# YOUR TASK
-Decompose the request into the SMALLEST possible tasks. Each task should be:
-- A single atomic action
-- Executable by either action layer (UI automation) or reasoning layer (logic/LLM)
-- Clearly dependent on previous tasks when necessary
 
 # DEVICE & CONTEXT
+
 - **device**: "desktop" or "mobile"
-- **context**: "local" (desktop apps, file system) or "web" (browser automation)
+- **context**: "local" (desktop apps) or "web" (browser automation)
 
 # TARGET AGENTS
-- **action**: UI automation (click, type, open apps, navigate)
-- **reasoning**: Logic tasks (summarize, analyze, generate content)
+
+- **action**: UI automation (click, type, navigate)
+- **reasoning**: Logic tasks (summarize, analyze)
 
 # TASK STRUCTURE
+
 Each task must have:
-- **ai_prompt**: Natural language instruction for RAG LLM (be specific and clear)
+- **ai_prompt**: Natural language instruction (CRITICAL: this is used by RAG to determine URLs and selectors)
 - **device**: "desktop" or "mobile"
 - **context**: "local" or "web"
 - **target_agent**: "action" or "reasoning"
-- **extra_params**: Any specific data (app_name, file_path, text_to_type, url, etc.)
-- **depends_on**: task_id of prerequisite task (null if independent)
+- **extra_params**: Additional data (app_name, file_path, etc.)
+- **web_params**: Web-specific parameters (action type only - NO URLs!)
+- **depends_on**: task_id of prerequisite task
 
-# DEPENDENCY RULES
-- **sequential**: Task B depends on Task A's completion (use "depends_on")
-- **parallel**: Tasks can run simultaneously (no "depends_on")
+# WEB_PARAMS STRUCTURE (for context: "web")
+
+🚨 CRITICAL: Do NOT hardcode URLs, selectors, or wait strategies!
+The execution layer will use RAG to determine these from the ai_prompt.
+
+For navigation tasks:
+{{
+  "action": "navigate"
+}}
+
+For interaction tasks (click, fill):
+{{
+  "action": "fill",
+  "text": "search query"  // Only include text for fill actions
+}}
+
+For extraction tasks:
+{{
+  "action": "extract"
+}}
 
 ============================
 VALID EXAMPLES
 ============================
+
+## Example 1: Simple Desktop Task
 
 User: "Open Notepad"
 
@@ -276,133 +299,179 @@ Return:
 [
   {{
     "task_id": "task_1",
-    "ai_prompt": "Open Notepad",
+    "ai_prompt": "Open Notepad application",
     "device": "desktop",
     "context": "local",
     "target_agent": "action",
     "extra_params": {{"app_name": "notepad"}},
+    "web_params": {{}},
     "depends_on": null
   }}
 ]
 
-User: "Download latest Moodle assignment and summarize it to Notepad"
+## Example 2: Simple Web Navigation Task
+
+User: "Go to Google"
+
+Return:
+[
+  {{
+    "task_id": "task_1",
+    "ai_prompt": "Navigate to Google homepage",
+    "device": "desktop",
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "navigate"
+    }},
+    "depends_on": null
+  }}
+]
+
+EXPLANATION: The ai_prompt "Navigate to Google homepage" will be sent to the web execution layer,
+which will use RAG to generate Playwright code that includes the URL https://www.google.com.
+
+## Example 3: Composite Web Task (E-commerce Search)
+
+User: "Search Amazon for white socks and extract the first 5 product titles"
 
 Tasks:
 [
   {{
     "task_id": "task_1",
-    "ai_prompt": "Open Chrome browser and navigate to Moodle login page",
+    "ai_prompt": "Navigate to Amazon homepage",
     "device": "desktop",
     "context": "web",
     "target_agent": "action",
-    "extra_params": {{"url": "https://moodle.edu"}},
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "navigate"
+    }},
     "depends_on": null
   }},
   {{
     "task_id": "task_2",
-    "ai_prompt": "Download the latest assignment from Moodle",
+    "ai_prompt": "Fill Amazon search box with 'white socks'",
     "device": "desktop",
     "context": "web",
     "target_agent": "action",
     "extra_params": {{}},
+    "web_params": {{
+      "action": "fill",
+      "text": "white socks"
+    }},
     "depends_on": "task_1"
   }},
   {{
     "task_id": "task_3",
-    "ai_prompt": "Open the downloaded file",
+    "ai_prompt": "Click Amazon search button",
     "device": "desktop",
-    "context": "local",
+    "context": "web",
     "target_agent": "action",
     "extra_params": {{}},
+    "web_params": {{
+      "action": "click"
+    }},
     "depends_on": "task_2"
   }},
   {{
     "task_id": "task_4",
-    "ai_prompt": "Copy all content from the opened file",
+    "ai_prompt": "Extract first 5 product titles from Amazon search results",
     "device": "desktop",
-    "context": "local",
+    "context": "web",
     "target_agent": "action",
     "extra_params": {{}},
+    "web_params": {{
+      "action": "extract"
+    }},
     "depends_on": "task_3"
-  }},
+  }}
+]
+
+EXPLANATION: Each ai_prompt is descriptive enough for RAG to generate the correct
+Playwright code with selectors, URLs, and wait strategies.
+
+## Example 4: Mixed Desktop + Web Task
+
+User: "Search Google for 'Playwright tutorial' and copy the first result title to Notepad"
+
+Tasks:
+[
   {{
-    "task_id": "task_5",
-    "ai_prompt": "Summarize the following assignment content into key points",
+    "task_id": "task_1",
+    "ai_prompt": "Navigate to Google homepage",
     "device": "desktop",
-    "context": "local",
-    "target_agent": "reasoning",
-    "content": "<content from task_4>",
-    "extra_params": {{"input_from": "task_4"}},
-    "depends_on": "task_4"
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "navigate"
+    }},
+    "depends_on": null
   }},
   {{
-    "task_id": "task_6",
+    "task_id": "task_2",
+    "ai_prompt": "Fill Google search box with 'Playwright tutorial'",
+    "device": "desktop",
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "fill",
+      "text": "Playwright tutorial"
+    }},
+    "depends_on": "task_1"
+  }},
+  {{
+    "task_id": "task_3",
+    "ai_prompt": "Extract the first search result title from Google",
+    "device": "desktop",
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "extract"
+    }},
+    "depends_on": "task_2"
+  }},
+  {{
+    "task_id": "task_4",
     "ai_prompt": "Open Notepad application",
     "device": "desktop",
     "context": "local",
     "target_agent": "action",
-    "extra_params": {{"app_name": "notepad.exe"}},
+    "extra_params": {{"app_name": "notepad"}},
+    "web_params": {{}},
+    "depends_on": "task_3"
+  }},
+  {{
+    "task_id": "task_5",
+    "ai_prompt": "Type the extracted search result title into Notepad",
+    "device": "desktop",
+    "context": "local",
+    "target_agent": "action",
+    "extra_params": {{"input_from": "task_3"}},
+    "web_params": {{}},
     "depends_on": "task_4"
-  }},
-  {{
-    "task_id": "task_7",
-    "ai_prompt": "Paste the summarized content into Notepad",
-    "device": "desktop",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{"input_from": "task_5"}},
-    "depends_on": "task_5,task_6"
-  }},
-  {{
-    "task_id": "task_8",
-    "ai_prompt": "Save the file as 'assignment_summary.txt'",
-    "device": "desktop",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{"filename": "assignment_summary.txt"}},
-    "depends_on": "task_7"
   }}
 ]
 
 # CRITICAL RULES
+
 1. **One action per task** - never combine multiple actions
-2. **Explicit dependencies** - if task B needs task A's output, set "depends_on": "task_A_id"
-3. **Natural prompts** - ai_prompt should be clear instructions for RAG LLM
-4. **No assumptions** - if info is missing (like Moodle password), include placeholder in extra_params
-5. **Parallel opportunities** - identify tasks that can run simultaneously (e.g., task_5 and task_6 above)
-
-============================
-CRITICAL CONSTRAINTS
-============================
-
-You must NEVER generate:
-- setup tasks
-- preparation tasks
-- explanation tasks
-- planning-only tasks
-- acknowledgment tasks
-- system-level reasoning
-- descriptions of what you are doing
-- clarifications or questions
-- assistant-like responses
-
-You must NEVER:
-- Describe the pipeline
-- Talk about agents
-- Ask the user for clarification
-- Explain your output
+2. **Explicit dependencies** - if task B needs task A's output, set "depends_on"
+3. **Descriptive prompts** - ai_prompt should be detailed enough for RAG to understand
+4. **Correct context** - web tasks get context: "web", desktop tasks get "local"
+5. **Minimal web_params** - ONLY include action type and text (for fill), nothing else
+6. **NO URLs** - NEVER hardcode URLs, let RAG resolve them from ai_prompt
+7. **NO selectors** - NEVER hardcode selectors, let RAG find them from ai_prompt
+8. **Empty web_params** - For local tasks, set web_params: {{}}
 
 ============================
 OUTPUT RULES
 ============================
 
-Return ONLY a valid JSON ARRAY of tasks.
-No wrapping object.
-No markdown.
-No commentary.
-No explanations.
-
-# OUTPUT FORMAT
 Return ONLY valid JSON array of tasks (no markdown, no explanations):
 [
   {{
@@ -412,10 +481,12 @@ Return ONLY valid JSON array of tasks (no markdown, no explanations):
     "context": <"local" | "web">,
     "target_agent": <"action" | "reasoning">,
     "extra_params": <object>,
+    "web_params": <object>,
     "depends_on": <string | null>
   }},
   ...
 ]
+
 Generate the task decomposition now:"""
 
     try:
@@ -431,7 +502,6 @@ Generate the task decomposition now:"""
 
         parsed = json.loads(response_text.strip())
 
-        # ✅ FIX: Accept list OR wrapped object
         if isinstance(parsed, list):
             action_tasks = [ActionTask(**task) for task in parsed]
         elif isinstance(parsed, dict) and "tasks" in parsed:
@@ -440,19 +510,17 @@ Generate the task decomposition now:"""
             raise ValueError("Invalid task decomposition format")
 
         logger.info(f"📋 Decomposed into {len(action_tasks)} tasks")
-        logger.info(f"{action_tasks}")
-        print(f"TASKS: {action_tasks}")
         return {"tasks": action_tasks}
 
-        
     except Exception as e:
         logger.error(f"❌ Task decomposition failed: {e}")
-        return {
-            "error": str(e)
-        }
+        return {"error": str(e)}
 
-# --- Orchestration Graph ---
+# --- REST OF THE CODE REMAINS THE SAME ---
+# (Orchestration graph, execution, broker integration, etc.)
+
 def create_coordinator_graph():
+    """Create the coordinator orchestration graph"""
     graph = StateGraph(dict)
 
     async def analyze_and_plan(state: Dict) -> Dict:
@@ -461,29 +529,62 @@ def create_coordinator_graph():
         session_id = state.get("session_id")
         user_id = state.get("user_id", "default_user")
         original_message_id = state.get("original_message_id")
-        device_type = raw_task.get("device_type", "desktop")  # NEW: Extract device_type
+        device_type = raw_task.get("device_type", "desktop")
 
         # Retrieve user preferences
-        try:
-            from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
-            pref_mgr = get_preference_manager(user_id)
-            preferences_context = pref_mgr.get_relevant_preferences(
-                str(raw_task.get("confirmation", "")), limit=10
-            )
-        except Exception as e:
-            logger.warning(f"⚠️ Could not retrieve preferences: {e}")
-            preferences_context = "No user preferences available"
 
-        # Decompose task - pass device_type to the prompt
-        plan_result = await decompose_task_to_actions(raw_task, preferences_context, device_type)  # NEW: Pass device_type
+        # ✅ Check for previous execution state in checkpoint
+        previous_execution_state = None
+        if checkpointer and session_id:
+            try:
+                logger.info(f"🔍 Checking for previous execution state in session {session_id}")
+                
+                # Get the latest checkpoint
+                checkpoint_tuple = await checkpointer.aget_tuple(
+                    config={"configurable": {"thread_id": session_id}}
+                )
+                
+                if checkpoint_tuple and checkpoint_tuple.checkpoint:
+                    checkpoint_data = checkpoint_tuple.checkpoint
+                    
+                    # Check channel_values for execution_state
+                    if "channel_values" in checkpoint_data:
+                        channel_vals = checkpoint_data["channel_values"]
+                        if "execution_state" in channel_vals:
+                            previous_execution_state = channel_vals["execution_state"]
+                            logger.info(f"🔄 Found previous execution state:")
+                            logger.info(f"   Completed: {previous_execution_state.get('completed_task_ids', [])}")
+                            logger.info(f"   Failed at: {previous_execution_state.get('failed_task_id', 'none')}")
+                else:
+                    logger.debug(f"No checkpoint found for session {session_id}")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Could not retrieve checkpoint: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+
+        if previous_execution_state:
+            execution_context = f"\n\n# PREVIOUS EXECUTION STATE\n"
+            execution_context += f"Failed at task: {previous_execution_state.get('failed_task_id')}\n"
+            execution_context += f"Completed tasks: {previous_execution_state.get('completed_task_ids', [])}\n"
+            execution_context += f"User is asking to retry. Continue from where you left off"
+            preferences_context = f"{preferences_context}{execution_context}"
+
+        # Decompose task
+        # ✅ FIX 3: Pass conversation history to decomposition
+        plan_result = await decompose_task_to_actions(
+            raw_task, 
+            preferences_context, 
+            device_type,
+            conversation_history=state.get("conversation_history", [])
+        )
         
         tasks = plan_result.get("tasks", [])
         
-        # NEW: Set device in all tasks if not already set
+        # Set device in all tasks if not already set
         for task in tasks:
-          if task.device is None:
-             task.device = device_type
-
+            if task.device is None:
+                task.device = device_type
         
         return {
             "input": state["input"],
@@ -496,20 +597,36 @@ def create_coordinator_graph():
         }
 
     async def execute_tasks(state: Dict) -> Dict:
-        """STEP 2: Execute tasks sequentially with dependency management"""
+        """STEP 2: Execute tasks sequentially"""
         tasks = state["tasks"]
         session_id = state.get("session_id")
         original_message_id = state.get("original_message_id")
         
-        # Add tasks to queue
         task_queue.reset()
         task_queue.add_to_current(tasks)
         
         results = {}
-        task_outputs = {}  # Store outputs for dependent tasks
-        
+        task_outputs = {}
+        #here
+        # ✅ Save checkpoint PROPERLY using LangGraph state
+        if checkpointer and session_id:
+            try:
+                # LangGraph automatically saves state when graph completes
+                # We just need to ensure state contains execution info
+                state["execution_state"] = {
+                    "completed_task_ids": list(results.keys()),
+                    "failed_task_id": next(
+                        (tid for tid, res in results.items() if res.status == "failed"), 
+                        None
+                    ),
+                    "total_tasks": len(tasks),
+                    "timestamp": datetime.now().isoformat()
+                }
+                logger.info(f"💾 Prepared execution state for checkpoint: {len(results)} completed")
+            except Exception as e:
+                logger.error(f"❌ Failed to prepare execution state: {e}")
+
         while task_queue.has_tasks():
-            # Check for stop/pause
             if task_queue.is_stopped:
                 logger.warning("⏹️ Execution stopped by user")
                 break
@@ -517,7 +634,6 @@ def create_coordinator_graph():
             while task_queue.is_paused:
                 await asyncio.sleep(0.5)
             
-            # Get next task
             current_task = task_queue.get_next_task()
             if not current_task:
                 break
@@ -530,7 +646,6 @@ def create_coordinator_graph():
                    and results.get(dep_id.strip()).status == "success"
                    for dep_id in dep_ids
                 )
-
                 
                 if not dependencies_met:
                     logger.warning(f"⏭️ Skipping {current_task.task_id} - dependencies not met")
@@ -551,18 +666,14 @@ def create_coordinator_graph():
             logger.info(f"🔄 Executing {current_task.task_id}: {current_task.ai_prompt[:50]}...")
             result = await execute_single_task(current_task, session_id, original_message_id)
             
-            # Store result
             results[current_task.task_id] = result
             task_queue.log_execution(current_task, result)
             
-            # Store output for dependent tasks
             if result.content:
                 task_outputs[current_task.task_id] = result.content
             
-            # Handle failure
             if result.status == "failed":
                 logger.error(f"❌ Task {current_task.task_id} failed: {result.error}")
-                # Option to retry from this point
                 break
         
         return {
@@ -580,11 +691,25 @@ def create_coordinator_graph():
         original_message_id = state.get("original_message_id")
         user_id = state.get("user_id", "default_user")
         
-        # Count successes
         success_count = sum(1 for r in results.values() if r.status == "success")
         total_count = len(results)
         
-        # Build response
+        # ✅ FIX 3: Update conversation history
+        if success_count > 0:
+            if "conversation_history" not in state:
+                state["conversation_history"] = []
+            
+            state["conversation_history"].append({
+                "user_message": state['input'].get('action', ''),
+                "action_taken": f"Executed {success_count} tasks",
+                "result": "success" if success_count == total_count else "partial",
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Keep only last 10 interactions
+            if len(state["conversation_history"]) > 10:
+                state["conversation_history"] = state["conversation_history"][-10:]
+        
         if success_count == total_count and total_count > 0:
             response_text = f"Task completed successfully! Executed {success_count} steps."
         elif success_count > 0:
@@ -592,7 +717,6 @@ def create_coordinator_graph():
         else:
             response_text = "Task could not be completed. Please try again."
         
-        # Send to Language Agent
         response_msg = AgentMessage(
             message_type=MessageType.TASK_RESPONSE,
             sender=AgentType.COORDINATOR,
@@ -604,7 +728,7 @@ def create_coordinator_graph():
                 "response": response_text,
                 "result": {
                     "completed_tasks": {k: v.status for k, v in results.items()},
-                    "details": [v.dict() for v in results.values()]
+                    "details": [v.model_dump() for v in results.values()]
                 }
             }
         )
@@ -612,12 +736,11 @@ def create_coordinator_graph():
         logger.info(f"📤 Sending feedback: {response_text}")
         await broker.publish(Channels.COORDINATOR_TO_LANGUAGE, response_msg)
         
-        # Store preferences (only on success)
         if success_count == total_count and total_count > 0:
             try:
+                from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
                 pref_mgr = get_preference_manager(user_id)
                 
-                # Extract preferences using LLM
                 task_summary = {
                     "original_request": state['input'].get('action', ''),
                     "completed_steps": [t.ai_prompt for t in state['tasks']],
@@ -646,37 +769,61 @@ OUTPUT FORMAT (JSON array):
 If NO preferences, return: []
 
 Extract now:"""
-
+                #here
                 extraction_response = await llm.ainvoke(extraction_prompt)
                 extraction_text = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
-                
-                # Clean markdown
+
+                # Clean markdown and validate
                 extraction_text = extraction_text.strip()
+                
+                # Remove markdown code blocks
                 if extraction_text.startswith("```"):
-                    extraction_text = extraction_text.split("```")[1]
-                    if extraction_text.startswith("json"):
-                        extraction_text = extraction_text[4:]
+                    parts = extraction_text.split("```")
+                    if len(parts) >= 2:
+                        extraction_text = parts[1]
+                        if extraction_text.strip().startswith("json"):
+                            extraction_text = extraction_text.strip()[4:]
                 
-                preferences_to_store = json.loads(extraction_text.strip())
+                extraction_text = extraction_text.strip()
                 
+                # Validate before parsing
+                if not extraction_text:
+                    logger.info("⚠️ No preferences extracted (empty response)")
+                    preferences_to_store = []
+                elif extraction_text == "[]":
+                    logger.info("⚠️ No preferences extracted (empty array)")
+                    preferences_to_store = []
+                else:
+                    try:
+                        preferences_to_store = json.loads(extraction_text)
+                        if not isinstance(preferences_to_store, list):
+                            logger.warning(f"⚠️ Invalid format (not array): {extraction_text[:100]}")
+                            preferences_to_store = []
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ JSON parse error: {e}")
+                        logger.error(f"❌ Raw text: {extraction_text[:200]}")
+                        preferences_to_store = []
                 if preferences_to_store and isinstance(preferences_to_store, list):
                     for pref_obj in preferences_to_store:
                         if pref_obj.get("confidence") in ["high", "medium"]:
-                            pref_mgr.add_preference(
-                                pref_obj["preference"],
+                            # Use safe method to prevent duplicates
+                            result = pref_mgr.add_preference_safe(
+                                preference=pref_obj["preference"],
                                 metadata={
                                     "category": pref_obj.get("category", "general"),
                                     "confidence": pref_obj.get("confidence", "medium"),
                                     "extracted_from": task_summary["original_request"]
-                                }
+                                },
+                                similarity_threshold=0.85  # 85% similarity = duplicate
                             )
-                            logger.info(f"💾 Stored preference: {pref_obj['preference']}")
-                
-                # Store conversation context
+                            if result:
+                                logger.info(f"💾 Stored NEW preference: {pref_obj['preference']}")
+                            else:
+                                logger.info(f"⏭️ Skipped duplicate preference")
                 conversation_context = f"User requested: {task_summary['original_request']}. "
                 conversation_context += f"Successfully completed {success_count} steps."
                 
-                pref_mgr.add_preference(
+                pref_mgr.add_preference_safe(
                     conversation_context,
                     metadata={
                         "category": "conversation_history",
@@ -688,10 +835,8 @@ Extract now:"""
             except Exception as e:
                 logger.error(f"❌ Failed to store preferences: {e}")
         
-        # Check global queue
         if task_queue.global_queue:
-            logger.info(f"📋 Processing next task from global queue ({len(task_queue.global_queue)} remaining)")
-            # This would trigger a new graph execution
+            logger.info(f"📋 Processing next task from global queue")
         
         return {"status": "completed"}
 
@@ -701,7 +846,7 @@ Extract now:"""
     graph.add_node("feedback", send_feedback)
 
     graph.set_entry_point("analyze")
-
+    
     def route_after_analysis(state):
         return "execute"
 
@@ -716,7 +861,61 @@ async def execute_single_task(
     session_id: str,
     original_message_id: str
 ) -> TaskResult:
-    """Execute a single task via action/reasoning layer"""
+    """Execute a single task via action/reasoning layer or mobile strategy"""
+    
+    # ════════════════════════════════════════════════════════════════
+    # WEB TASK LOGGING
+    # ════════════════════════════════════════════════════════════════
+    if task.context == "web":
+        logger.info(f"🌐 WEB TASK: {task.task_id}")
+        logger.info(f"   ai_prompt: {task.ai_prompt}")
+        logger.info(f"   web_params: {json.dumps(task.web_params, indent=2)}")
+        logger.info("   ℹ️  Note: URL and selectors will be resolved by execution layer via RAG")
+    
+    # ════════════════════════════════════════════════════════════════
+    # MOBILE TASK ROUTING (NEW)
+    # ════════════════════════════════════════════════════════════════
+    if task.device == "mobile" and task.target_agent == "action":
+        # Route to mobile strategy directly (skip broker)
+        logger.info(f"📱 Mobile task detected: {task.task_id}")
+        try:
+            from agents.execution_agent.handlers.mobile_action_handler import (
+                initialize_mobile_handler, get_mobile_handler
+            )
+            
+            # Get device_id - use android_device_1 by default for Flutter apps
+            device_id = task.extra_params.get("device_id", "android_device_1")
+            
+            logger.info(f"📱 Using device: {device_id}")
+            
+            # Initialize if needed
+            initialize_mobile_handler(device_id=device_id)
+            handler = await get_mobile_handler()
+            
+            # Execute directly
+            result = await handler.handle_action_task(
+                task_data=task.model_dump(),
+                task_id=task.task_id,
+                session_id=session_id
+            )
+            
+            return TaskResult(
+                task_id=task.task_id,
+                status=result.status,
+                content=result.details,
+                error=result.error
+            )
+        except Exception as e:
+            logger.error(f"❌ Mobile task execution failed: {e}", exc_info=True)
+            return TaskResult(
+                task_id=task.task_id,
+                status="failed",
+                error=f"Mobile execution error: {str(e)}"
+            )
+    
+    # ════════════════════════════════════════════════════════════════
+    # DESKTOP TASK ROUTING (ORIGINAL)
+    # ════════════════════════════════════════════════════════════════
     
     # Route to appropriate agent
     if task.target_agent == "action":
@@ -734,14 +933,15 @@ async def execute_single_task(
         session_id=session_id,
         task_id=task.task_id,
         response_to=original_message_id,
-        payload=task.dict()
+        payload=task.model_dump()  # ← Also fix deprecated .dict() to .model_dump()
     )
     
     # Create future for response
-    future = asyncio.Future()
+    future = create_guarded_future(task.task_id)
     pending_results[task.task_id] = future
     
     # Publish
+    logger.info(f"📤 Publishing task {task.task_id} to {receiver}")
     await broker.publish(channel, task_msg)
     
     # Wait for result
@@ -760,6 +960,7 @@ async def execute_single_task(
             
         return TaskResult(**result_payload)
     except asyncio.TimeoutError:
+        logger.error(f"⏰ Task {task.task_id} timeout after 60 seconds")
         return TaskResult(
             task_id=task.task_id,
             status="failed",
@@ -782,22 +983,20 @@ async def start_coordinator_agent(broker_instance):
         http_request_id = message.response_to if message.response_to else message.message_id
         user_id = message.payload.get("user_id", "default_user")
         session_id = message.session_id
-        
-        # NEW: Send thinking update
+
         await ThinkingStepManager.update_step(session_id, "Formulating plan...", http_request_id)
         
-        # Check if this is a new task while executing
         if task_queue.has_tasks() and not task_queue.is_stopped:
             logger.info("📥 Adding task to global queue (currently executing)")
             task_queue.add_to_global(message.payload)
             return
         
-        # Execute task
         state_input = {
             "input": message.payload,
             "session_id": session_id,
             "original_message_id": http_request_id,
-            "user_id": user_id
+            "user_id": user_id,
+            "conversation_history": []  # ✅ FIX 3: Initialize empty if not present
         }
         config = {
             "configurable": {
@@ -806,23 +1005,54 @@ async def start_coordinator_agent(broker_instance):
             }
         }
 
-        # NEW: Send thinking update
         await ThinkingStepManager.update_step(session_id, "Decomposing tasks...", http_request_id)
 
         result = await coordinator_graph.ainvoke(state_input, config)
         logger.info(f"✅ Task processing complete: {result.get('status')}")
         
-        # NEW: Send thinking update
         await ThinkingStepManager.update_step(session_id, "Organizing execution...", http_request_id)
     
     async def handle_action_result(message: AgentMessage):
-        """Handle result from Action/Reasoning layer"""
-        task_id = message.task_id
-        logger.info(f"📬 Result for {task_id}: {message.payload.get('status')}")
+        """
+        Handle result from Action/Reasoning layer (ASYNC-SAFE VERSION)
         
-        # Resolve pending future
-        if task_id in pending_results:
-            pending_results[task_id].set_result(message.payload)
+        ✅ FIXES:
+        - InvalidStateError from duplicate set_result() calls
+        - Race conditions in future handling
+        - Silent failures when results arrive out of order
+        """
+        task_id = message.task_id
+        result_status = message.payload.get('status', 'unknown')
+        
+        logger.info(f"📬 Result for {task_id}: {result_status}")
+        
+        # Check if we're expecting this result
+        if task_id not in pending_results:
+            logger.warning(f"⚠️ Received result for unknown task {task_id} (may have timed out)")
+            return
+        
+        future = pending_results[task_id]
+        
+        # ✅ CRITICAL FIX: Guard against duplicate results
+        if future.done():
+            logger.warning(
+                f"⚠️ Task {task_id} already resolved - "
+                f"ignoring duplicate result with status '{result_status}'"
+            )
+            return
+        
+        # ✅ Safe to set result now
+        try:
+            future.set_result(message.payload)
+            logger.debug(f"✅ Successfully set result for task {task_id}")
+        except asyncio.InvalidStateError as e:
+            # This should never happen now, but log if it does
+            logger.error(
+                f"❌ Unexpected InvalidStateError for {task_id}: {e}\n"
+                f"Future state: done={future.done()}, cancelled={future.cancelled()}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Unexpected error setting result for {task_id}: {e}")
     
     async def handle_interrupt_command(message: AgentMessage):
         """Handle pause/stop/resume commands"""

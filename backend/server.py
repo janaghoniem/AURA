@@ -25,9 +25,20 @@ from agents.utils.protocol import (
     ClarificationMessage
 )
 from ThinkingStepManager import ThinkingStepManager
+from routes.device_routes import router as device_router
 from dotenv import load_dotenv
+import os
+from memory_api import router as memory_router
 
 load_dotenv()
+
+# Debug: Check which .env file was loaded and what keys are set
+logger_debug = logging.getLogger("server_init")
+groq_key = os.getenv("GROQ_API_KEY")
+if groq_key:
+    logger_debug.info(f"🔑 GROQ_API_KEY loaded: {groq_key[:20]}...{groq_key[-10:]}")
+else:
+    logger_debug.error("❌ GROQ_API_KEY NOT found in environment!")
 
 # Configure logging
 logging.basicConfig(
@@ -103,14 +114,26 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Include device routes
+app.include_router(device_router)
+app.include_router(memory_router)
+logger.info("✅ Memory API routes registered at /api/memory")
+
 # CORS for Electron
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",  # React default
+        "http://localhost:5173",  # Vite default
+        "http://localhost:8080",  # Alternative
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+logger.info("✅ CORS middleware configured")
 
 
 # ============================================================================
@@ -315,6 +338,64 @@ async def transcribe_audio(request: Request):
     except Exception as e:
         logger.error(f"❌ Transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+
+
+
+@app.post("/session/new")
+async def create_new_session(request: Request):
+    """Create a new chat session and clear short-term memory"""
+    try:
+        data = await request.json()
+        old_session_id = data.get("old_session_id")
+        new_session_id = data.get("new_session_id")
+        user_id = data.get("user_id", "test_user")
+        
+        logger.info(f"🔄 Creating new session: {old_session_id} → {new_session_id}")
+        
+        # Clear Language Agent's conversation history
+        from agents.language_agent import active_agents
+        agent_key = f"{user_id}_{old_session_id}"
+        
+        if agent_key in active_agents:
+            logger.info(f"🗑️ Clearing conversation for {agent_key}")
+            active_agents[agent_key].clear_conversation()
+            # Remove old agent
+            del active_agents[agent_key]
+            logger.info(f"✅ Cleared and removed agent: {agent_key}")
+        else:
+            logger.info(f"ℹ️ No active agent found for {agent_key}")
+        
+        # ✅ FIX: Send session control message to Coordinator to clear LangGraph checkpoint
+        try:
+            session_control_msg = AgentMessage(
+                message_type=MessageType.STATUS_UPDATE,
+                sender=AgentType.LANGUAGE,
+                receiver=AgentType.COORDINATOR,
+                session_id=old_session_id,
+                payload={
+                    "command": "start_new_chat",
+                    "old_session_id": old_session_id,
+                    "new_session_id": new_session_id
+                }
+            )
+            
+            # Publish to session control channel (Coordinator listens to this)
+            await broker.publish(Channels.SESSION_CONTROL, session_control_msg)
+            logger.info(f"✅ Sent session control message to Coordinator")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to send session control message: {e}")
+        
+        return {
+            "status": "success",
+            "old_session_id": old_session_id,
+            "new_session_id": new_session_id,
+            "message": "New chat session created. Short-term memory cleared."
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Session creation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/process")
 async def process_user_input(request: Request):
@@ -328,7 +409,7 @@ async def process_user_input(request: Request):
         session_id = data.get("session_id", "default")
         user_input = data.get("input", "").strip()
         is_clarification = data.get("is_clarification", False)
-        device_type = data.get("device_type", "desktop")
+        device_type = data.get("device_type", "mobile")
         
         if not user_input:
             raise HTTPException(status_code=400, detail="Missing 'input' field")

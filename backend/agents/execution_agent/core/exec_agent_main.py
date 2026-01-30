@@ -33,7 +33,11 @@ from ..layers.exec_agent_safety import SafetyLayer
 from ..strategies.local_strategy import LocalStrategy
 from ..strategies.web_strategy import WebStrategy
 from ..strategies.system_strategy import SystemStrategy
+from ..strategies.mobile_strategy import MobileStrategy  # ← NEW: Mobile strategy
 from ..utils import setup_logging
+
+import logging
+logger = logging.getLogger(__name__)
 
 class ExecutionAgent:
     """
@@ -77,6 +81,10 @@ class ExecutionAgent:
         except ImportError:
             self.logger.warning("PowerPoint handler not available")
         
+        # Initialize mobile strategy (separate from desktop)
+        mobile_strategy = MobileStrategy(device_id="default_device")
+        self.logger.info("✅ Mobile strategy initialized")
+        
         self.strategies = {
             ExecutionContext.LOCAL.value: local_strategy,
             ExecutionContext.WEB.value: WebStrategy(
@@ -84,7 +92,8 @@ class ExecutionAgent:
             ),
             ExecutionContext.SYSTEM.value: SystemStrategy(
                 self.logger, self.safety_layer
-            )
+            ),
+            "mobile": mobile_strategy  # ← NEW: Mobile context
         }
         
         # Check dependencies
@@ -148,6 +157,12 @@ class ExecutionAgent:
                     status=result.status,
                     details=asdict(result)
                 )
+                if result.status == ActionStatus.SUCESS.value:
+                    if hasattr(result,'metadata') and result.metadata:
+                        if result.metadata.get('detection_method') == 'omniparser':
+                            self.logger.warning(f"⚠️ SUCCESS via OmniParser fallback!")
+                    
+                    self.logger.info(f"✅ Task completed successfully")
                 
                 if result.status == ActionStatus.SUCCESS.value:
                     self.logger.info(f"Task completed successfully: {task.action_type}")

@@ -66,3 +66,11 @@ pyyaml>=6.0.0
 pywin32>=226; sys_platform == 'win32'
 
 sentence-transformers
+
+# OmniParser dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+pillow>=9.0.0
+opencv-python>=4.7.0
+ultralytics>=8.0.0  # For YOLO model

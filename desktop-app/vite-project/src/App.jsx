@@ -17,6 +17,7 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [deviceType, setDeviceType] = useState("desktop");
+  const [screenSize, setScreenSize] = useState("desktop");
   const [userName, setUserName] = useState("Labubu");
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -30,10 +31,10 @@ function App() {
     const handleResize = () => {
       const width = window.innerWidth;
       if (width < 768) {
-        setDeviceType("mobile");
+        setScreenSize("mobile");
         setIsSidebarCollapsed(true);
       } else {
-        setDeviceType("desktop");
+        setScreenSize("desktop");
       }
     };
 
@@ -99,6 +100,7 @@ function App() {
     setIsThinking(false);
     setChatMode(false);
   };
+
 
   /* ---------- THINKING STEPS SIMULATION ---------- */
   const startThinkingSequence = async () => {
@@ -395,7 +397,7 @@ function App() {
         onNewChat={handleNewChat}
       />
 
-      <main className={`main-area ${isSidebarCollapsed && deviceType === "mobile" ? "mobile-sidebar-open" : ""}`}>
+      <main className={`main-area ${isSidebarCollapsed && screenSize === "mobile" ? "mobile-sidebar-open" : ""}`}>
         <video autoPlay muted loop playsInline>
           <source src="/Background3.mp4" type="video/mp4" />
         </video>
