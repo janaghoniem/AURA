@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { X, User, Brain, Trash2, RefreshCw } from "lucide-react";
+import { X, User, Brain, Trash2, RefreshCw, Eye, EyeOff } from "lucide-react";
 
 const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
   const [activeSection, setActiveSection] = useState("profile");
@@ -10,25 +10,22 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
     language: "en",
   });
   
-  // ✅ NEW: Memory stats state
+  // ✅ Long-term memory (preferences) stats
   const [memoryStats, setMemoryStats] = useState({
-    total_conversations: 0,
     total_preferences: 0,
-    total_checkpoints: 0,
+    personal_info_count: 0,
+    app_preferences_count: 0,
     storage_size_mb: 0,
   });
   
-  const [memoryData, setMemoryData] = useState({
-    maxConversationDays: 30,
-    maxCheckpointDays: 7,
-    maxMessagesPerSession: 50,
-    autoCleanup: true,
-  });
+  // ✅ Actual stored preferences (for viewing)
+  const [preferences, setPreferences] = useState([]);
+  const [showPreferences, setShowPreferences] = useState(false);
   
   const [loading, setLoading] = useState(false);
-  const [cleanupStatus, setCleanupStatus] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
 
-  // ✅ NEW: Fetch memory stats on mount
+  // Fetch memory stats when Memory tab is opened
   useEffect(() => {
     if (activeSection === "memory") {
       fetchMemoryStats();
@@ -40,79 +37,57 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
       setLoading(true);
       const userId = localStorage.getItem("user_id") || "test_user";
       
-      const response = await fetch(`http://localhost:8000/api/memory/stats?user_id=${userId}`);
+      // Get preference stats
+      const response = await fetch(`http://localhost:8000/api/memory/preferences?user_id=${userId}&limit=100`);
       const data = await response.json();
       
-      setMemoryStats(data);
+      // Calculate stats
+      const prefs = data.preferences || [];
+      const personalInfo = prefs.filter(p => p.category === "personal_info");
+      const appPrefs = prefs.filter(p => p.category === "app_usage");
+      
+      setMemoryStats({
+        total_preferences: prefs.length,
+        personal_info_count: personalInfo.length,
+        app_preferences_count: appPrefs.length,
+        storage_size_mb: ((JSON.stringify(prefs).length) / (1024 * 1024)).toFixed(2)
+      });
+      
+      setPreferences(prefs);
+      
     } catch (error) {
       console.error("Failed to fetch memory stats:", error);
-      setCleanupStatus("❌ Failed to load memory statistics");
+      setStatusMessage("❌ Failed to load memory statistics");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCleanup = async () => {
-    if (!confirm("⚠️ This will delete old conversations and trim history. Continue?")) {
+  const handleClearLongTermMemory = async () => {
+    if (!confirm("🚨 WARNING: This will DELETE ALL your learned preferences and personal information permanently. Your conversation history will remain. Are you sure?")) {
       return;
     }
 
     try {
       setLoading(true);
-      setCleanupStatus("🧹 Cleaning up memories...");
+      setStatusMessage("🗑️ Clearing long-term memory...");
       
       const userId = localStorage.getItem("user_id") || "test_user";
       
-      const response = await fetch(`http://localhost:8000/api/memory/cleanup?user_id=${userId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          max_conversation_days: memoryData.maxConversationDays,
-          max_checkpoint_days: memoryData.maxCheckpointDays,
-          max_messages_per_session: memoryData.maxMessagesPerSession,
-        }),
-      });
-
-      const result = await response.json();
-      
-      setCleanupStatus(`✅ Cleanup complete! Deleted ${result.conversations_deleted} conversations, ${result.checkpoints_deleted} checkpoints, trimmed ${result.sessions_trimmed} sessions.`);
-      
-      // Refresh stats
-      await fetchMemoryStats();
-      
-    } catch (error) {
-      console.error("Cleanup failed:", error);
-      setCleanupStatus("❌ Cleanup failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClearAll = async () => {
-    if (!confirm("🚨 WARNING: This will DELETE ALL your memories permanently. Are you ABSOLUTELY sure?")) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setCleanupStatus("🗑️ Deleting all memories...");
-      
-      const userId = localStorage.getItem("user_id") || "test_user";
-      
-      const response = await fetch(`http://localhost:8000/api/memory/clear-all?user_id=${userId}`, {
+      const response = await fetch(`http://localhost:8000/api/memory/clear-preferences?user_id=${userId}`, {
         method: "DELETE",
       });
 
       const result = await response.json();
       
-      setCleanupStatus(`✅ All memories cleared! Deleted ${result.conversations_deleted} conversations, ${result.preferences_deleted} preferences.`);
+      setStatusMessage(`✅ Long-term memory cleared! Deleted ${result.preferences_deleted} preferences.`);
       
       // Refresh stats
       await fetchMemoryStats();
       
     } catch (error) {
-      console.error("Clear all failed:", error);
-      setCleanupStatus("❌ Clear all failed");
+      console.error("Clear memory failed:", error);
+      setStatusMessage("❌ Failed to clear memory");
     } finally {
       setLoading(false);
     }
@@ -122,12 +97,8 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
     setProfileData({ ...profileData, [field]: value });
   };
 
-  const handleMemoryChange = (field, value) => {
-    setMemoryData({ ...memoryData, [field]: value });
-  };
-
   const handleSave = () => {
-    console.log("Settings saved:", { profileData, memoryData });
+    console.log("Settings saved:", { profileData });
     onSave(profileData);
     onClose();
   };
@@ -157,7 +128,7 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
                 onClick={() => setActiveSection("memory")}
               >
                 <Brain size={16} />
-                <span>Memory</span>
+                <span>Long-Term Memory</span>
               </button>
             </nav>
           </div>
@@ -219,36 +190,39 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
 
             {activeSection === "memory" && (
               <div className="settings-section">
-                <h3 className="section-title">Memory Management</h3>
+                <h3 className="section-title">Long-Term Memory</h3>
+                <p style={{ fontSize: "14px", color: "rgba(255,255,255,0.7)", marginBottom: "20px" }}>
+                  Your AI learns your preferences over time. This includes your name, app choices, and work patterns.
+                </p>
                 
-                {/* ✅ NEW: Memory Statistics */}
+                {/* ✅ Memory Statistics */}
                 <div className="memory-stats-card">
                   <h4 style={{ fontSize: "16px", marginBottom: "12px", color: "rgba(255,255,255,0.9)" }}>
-                    Current Usage
+                    Stored Preferences
                   </h4>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                     <div style={{ background: "rgba(255,255,255,0.05)", padding: "12px", borderRadius: "8px" }}>
                       <div style={{ fontSize: "24px", fontWeight: "bold", color: "#ff4d6d" }}>
-                        {memoryStats.total_conversations}
+                        {memoryStats.total_preferences}
                       </div>
                       <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
-                        Conversations
+                        Total Preferences
                       </div>
                     </div>
                     <div style={{ background: "rgba(255,255,255,0.05)", padding: "12px", borderRadius: "8px" }}>
                       <div style={{ fontSize: "24px", fontWeight: "bold", color: "#7a1fa2" }}>
-                        {memoryStats.total_preferences}
+                        {memoryStats.personal_info_count}
                       </div>
                       <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
-                        Preferences
+                        Personal Info
                       </div>
                     </div>
                     <div style={{ background: "rgba(255,255,255,0.05)", padding: "12px", borderRadius: "8px" }}>
                       <div style={{ fontSize: "24px", fontWeight: "bold", color: "#38bdf8" }}>
-                        {memoryStats.total_checkpoints}
+                        {memoryStats.app_preferences_count}
                       </div>
                       <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
-                        Checkpoints
+                        App Preferences
                       </div>
                     </div>
                     <div style={{ background: "rgba(255,255,255,0.05)", padding: "12px", borderRadius: "8px" }}>
@@ -282,99 +256,127 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
                   </button>
                 </div>
 
-                {/* Cleanup Configuration */}
-                <div className="settings-group" style={{ marginTop: "24px" }}>
-                  <label className="settings-label">
-                    Delete Conversations Older Than (Days)
-                    <input
-                      type="number"
-                      className="settings-input"
-                      value={memoryData.maxConversationDays}
-                      onChange={(e) =>
-                        handleMemoryChange("maxConversationDays", parseInt(e.target.value))
-                      }
-                    />
-                  </label>
+                {/* ✅ View Preference Examples */}
+                <div style={{ marginTop: "24px" }}>
+                  <button
+                    onClick={() => setShowPreferences(!showPreferences)}
+                    style={{
+                      width: "100%",
+                      padding: "12px",
+                      background: "rgba(255,255,255,0.05)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: "10px",
+                      color: "white",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      fontSize: "14px",
+                      fontWeight: "500"
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      {showPreferences ? <EyeOff size={16} /> : <Eye size={16} />}
+                      {showPreferences ? "Hide" : "View"} Stored Preferences
+                    </span>
+                    <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.6)" }}>
+                      {preferences.length} items
+                    </span>
+                  </button>
 
-                  <label className="settings-label">
-                    Delete Checkpoints Older Than (Days)
-                    <input
-                      type="number"
-                      className="settings-input"
-                      value={memoryData.maxCheckpointDays}
-                      onChange={(e) =>
-                        handleMemoryChange("maxCheckpointDays", parseInt(e.target.value))
-                      }
-                    />
-                  </label>
+                  {showPreferences && (
+                    <div style={{
+                      marginTop: "12px",
+                      maxHeight: "300px",
+                      overflowY: "auto",
+                      background: "rgba(0,0,0,0.2)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      borderRadius: "10px",
+                      padding: "12px"
+                    }}>
+                      {preferences.length === 0 ? (
+                        <p style={{ fontSize: "13px", color: "rgba(255,255,255,0.5)", textAlign: "center", padding: "20px" }}>
+                          No preferences stored yet. Use the system and it will learn your habits!
+                        </p>
+                      ) : (
+                        preferences.map((pref, idx) => (
+                          <div 
+                            key={idx}
+                            style={{
+                              padding: "10px 12px",
+                              background: "rgba(255,255,255,0.03)",
+                              borderRadius: "6px",
+                              marginBottom: "8px",
+                              borderLeft: `3px solid ${
+                                pref.category === "personal_info" ? "#ff4d6d" :
+                                pref.category === "app_usage" ? "#7a1fa2" :
+                                "#38bdf8"
+                              }`
+                            }}
+                          >
+                            <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.9)" }}>
+                              {pref.text}
+                            </div>
+                            <div style={{ 
+                              fontSize: "11px", 
+                              color: "rgba(255,255,255,0.5)", 
+                              marginTop: "4px",
+                              display: "flex",
+                              gap: "12px"
+                            }}>
+                              <span>📁 {pref.category}</span>
+                              {pref.timestamp && (
+                                <span>🕒 {new Date(pref.timestamp).toLocaleDateString()}</span>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
 
-                  <label className="settings-label">
-                    Max Messages Per Session
-                    <input
-                      type="number"
-                      className="settings-input"
-                      value={memoryData.maxMessagesPerSession}
-                      onChange={(e) =>
-                        handleMemoryChange("maxMessagesPerSession", parseInt(e.target.value))
-                      }
-                    />
-                  </label>
-
-                  <label className="settings-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={memoryData.autoCleanup}
-                      onChange={(e) =>
-                        handleMemoryChange("autoCleanup", e.target.checked)
-                      }
-                    />
-                    Enable Automatic Cleanup (Daily)
-                  </label>
-
-                  {/* ✅ NEW: Cleanup Actions */}
-                  <div style={{ marginTop: "20px", display: "flex", gap: "12px" }}>
+                {/* ✅ Clear Memory Action */}
+                <div style={{ marginTop: "24px" }}>
+                  <div style={{
+                    background: "rgba(220, 38, 38, 0.1)",
+                    border: "1px solid rgba(220, 38, 38, 0.3)",
+                    borderRadius: "10px",
+                    padding: "16px",
+                    marginBottom: "12px"
+                  }}>
+                    <h4 style={{ fontSize: "14px", color: "#ef4444", marginBottom: "8px", fontWeight: "600" }}>
+                      ⚠️ Danger Zone
+                    </h4>
+                    <p style={{ fontSize: "12px", color: "rgba(255,255,255,0.7)", marginBottom: "12px" }}>
+                      Clear all learned preferences. This will make the AI forget your name, app choices, and work patterns. 
+                      <strong> Your conversation history will NOT be deleted.</strong>
+                    </p>
                     <button
-                      onClick={handleCleanup}
+                      onClick={handleClearLongTermMemory}
                       disabled={loading}
                       style={{
-                        flex: 1,
-                        padding: "12px",
-                        background: "linear-gradient(135deg, #ff4d6d, #7a1fa2)",
-                        border: "none",
-                        borderRadius: "10px",
-                        color: "white",
-                        cursor: loading ? "not-allowed" : "pointer",
-                        fontWeight: "500",
-                        opacity: loading ? 0.6 : 1
-                      }}
-                    >
-                      {loading ? "Cleaning..." : "Run Cleanup Now"}
-                    </button>
-                    
-                    <button
-                      onClick={handleClearAll}
-                      disabled={loading}
-                      style={{
-                        padding: "12px 20px",
+                        padding: "10px 20px",
                         background: "rgba(220, 38, 38, 0.2)",
                         border: "1px solid rgba(220, 38, 38, 0.5)",
-                        borderRadius: "10px",
+                        borderRadius: "8px",
                         color: "#ef4444",
                         cursor: loading ? "not-allowed" : "pointer",
                         display: "flex",
                         alignItems: "center",
-                        gap: "8px"
+                        gap: "8px",
+                        fontSize: "13px",
+                        fontWeight: "500"
                       }}
                     >
                       <Trash2 size={16} />
-                      Clear All
+                      {loading ? "Clearing..." : "Clear Long-Term Memory"}
                     </button>
                   </div>
 
                   {/* Status Message */}
-                  {cleanupStatus && (
+                  {statusMessage && (
                     <div style={{
-                      marginTop: "16px",
                       padding: "12px",
                       background: "rgba(255, 255, 255, 0.05)",
                       border: "1px solid rgba(255, 255, 255, 0.1)",
@@ -382,9 +384,28 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
                       fontSize: "13px",
                       color: "rgba(255, 255, 255, 0.9)"
                     }}>
-                      {cleanupStatus}
+                      {statusMessage}
                     </div>
                   )}
+                </div>
+
+                {/* Info Box */}
+                <div style={{
+                  marginTop: "20px",
+                  padding: "12px",
+                  background: "rgba(56, 189, 248, 0.1)",
+                  border: "1px solid rgba(56, 189, 248, 0.3)",
+                  borderRadius: "8px",
+                  fontSize: "12px",
+                  color: "rgba(255,255,255,0.8)"
+                }}>
+                  <strong>💡 How Long-Term Memory Works:</strong>
+                  <ul style={{ marginTop: "8px", paddingLeft: "20px" }}>
+                    <li>Learns from successful tasks (e.g., "User prefers Chrome")</li>
+                    <li>Stores personal info when mentioned (e.g., your name)</li>
+                    <li>Remembers across sessions (permanent until cleared)</li>
+                    <li>Separate from conversation history (chat messages)</li>
+                  </ul>
                 </div>
               </div>
             )}
