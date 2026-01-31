@@ -1,3 +1,4 @@
+// SideBar.jsx
 import { Settings, Menu, X, SquarePen } from "lucide-react";
 
 const SideBar = ({ collapsed, onToggle, onSettingsClick, onNewChat }) => {

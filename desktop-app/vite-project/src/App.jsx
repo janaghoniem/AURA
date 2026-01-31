@@ -1,3 +1,4 @@
+// App.jsx
 import React, { useState, useRef, useEffect } from "react";
 import Sidebar from "./components/SideBar";
 import HeaderContent from "./components/HeaderContent";

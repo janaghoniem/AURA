@@ -1,3 +1,4 @@
+// VoiceControls.jsx
 import React, { useState } from "react";
 import { Mic, Settings, X, Send } from "lucide-react";
 

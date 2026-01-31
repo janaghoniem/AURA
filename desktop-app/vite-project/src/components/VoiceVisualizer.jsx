@@ -1,3 +1,4 @@
+// VoiceVisualizer.jsx
 const VoiceVisualizer = ({ t, glowColor, pulseColor }) => {
     
     // Calculate dynamic styles using the pre-calculated values

@@ -1,3 +1,4 @@
+// HeaderContent.jsx
 import React, { useMemo, useState } from "react";
 
 const GREETINGS = {

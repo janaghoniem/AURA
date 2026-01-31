@@ -1,3 +1,4 @@
+// SettingsModal.jsx
 import React, { useState, useEffect } from "react";
 import { X, User, Brain, Trash2, RefreshCw, Eye, EyeOff } from "lucide-react";
 
