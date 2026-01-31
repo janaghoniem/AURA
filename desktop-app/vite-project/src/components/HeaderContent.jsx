@@ -51,10 +51,10 @@ const HeaderContent = ({ userName = "Labubu", mode = "default" }) => {
   }, []);
 
   return (
-    <div className="center-content">
-      <p className="greeting">{greeting}</p>
-      <h1 className="headline">{headline}</h1>
-    </div>
+    <header className="center-content" role="banner" aria-label="Main banner">
+      <p className="greeting" aria-live="polite">{greeting}</p>
+      <h1 id="main-headline" className="headline" aria-live="polite" aria-atomic="true">{headline}</h1>
+    </header>
   );
 };
 

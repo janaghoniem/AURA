@@ -1,5 +1,6 @@
 // App.jsx
 import React, { useState, useRef, useEffect } from "react";
+import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import Sidebar from "./components/SideBar";
 import HeaderContent from "./components/HeaderContent";
 import VoiceControls from "./components/VoiceControls";
@@ -26,6 +27,10 @@ function App() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(new Audio());
+  const audioContextRef = useRef(null);
+
+  // Speech recognition (wake-word)
+  const { transcript, interimTranscript, finalTranscript, resetTranscript } = useSpeechRecognition();
 
   /* ---------- DEVICE DETECTION & RESPONSIVE LAYOUT ---------- */
   useEffect(() => {
@@ -55,20 +60,32 @@ function App() {
     /* ---------- CONNECT TO THINKING STREAM ---------- */
   useEffect(() => {
     const eventSource = new EventSource(`http://localhost:8000/thinking-stream/${sessionId}`);
-    
-    // Inside your useEffect for SSE
+
+    // Robust SSE handler allowing JSON or plain text steps
     eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.steps) {
-        setThinkingSteps(data.steps); // This now receives ['Step 1', 'Step 2']
+      try {
+        const data = JSON.parse(event.data);
+        if (data.step) {
+          setThinkingSteps(prev => [...prev, data.step]);
+          setIsThinking(true);
+        } else if (Array.isArray(data.steps)) {
+          setThinkingSteps(data.steps);
+          setIsThinking(data.steps.length > 0);
+        }
+      } catch (err) {
+        console.warn("[UI] Non-JSON SSE payload:", event.data);
+        if (event.data && typeof event.data === 'string' && event.data.trim().length > 0) {
+          setThinkingSteps(prev => [...prev, event.data]);
+          setIsThinking(true);
+        }
       }
     };
-     
+
     eventSource.onerror = () => {
       console.warn("[UI] Thinking stream disconnected");
       eventSource.close();
     };
-    
+
     return () => eventSource.close();
   }, [sessionId]);
 
@@ -136,13 +153,74 @@ function App() {
         const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         console.log(`[Audio] Recording stopped. Size: ${blob.size} bytes`);
         stream.getTracks().forEach((t) => t.stop());
+
+        // Stop and clear audio context if used
+        if (audioContextRef.current) {
+          try { audioContextRef.current.close(); } catch (e) {}
+          audioContextRef.current = null;
+        }
+
         processAudio(blob);
+
+        // Resume wake-word listening after processing audio
+        try {
+          if (SpeechRecognition.browserSupportsSpeechRecognition()) {
+            SpeechRecognition.startListening({ continuous: true, language: 'en-US' });
+            console.log('[Wake] Resumed wake-word listening');
+          }
+        } catch (e) {
+          console.warn('[Wake] Failed to resume listening:', e);
+        }
       };
 
       recorder.start();
       setIsRecording(true);
       setOrbState("listening");
       setUserMessage("Listening...");
+
+      // Silence detection using Web Audio API
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        audioContextRef.current = audioCtx;
+        const sourceNode = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 2048;
+        sourceNode.connect(analyser);
+        const bufferLength = analyser.fftSize;
+        const dataArray = new Uint8Array(bufferLength);
+        let silentStart = null;
+
+        const checkSilence = () => {
+          analyser.getByteTimeDomainData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            const v = (dataArray[i] - 128) / 128;
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / bufferLength);
+          if (rms < 0.01) {
+            if (silentStart === null) silentStart = Date.now();
+            else if (Date.now() - silentStart > 5000) {
+              console.log('[Audio] Silence detected >5s, stopping recording');
+              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                mediaRecorderRef.current.stop();
+              }
+            }
+          } else {
+            silentStart = null;
+          }
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+            requestAnimationFrame(checkSilence);
+          } else {
+            try { audioCtx.close(); } catch (e) {}
+          }
+        };
+
+        requestAnimationFrame(checkSilence);
+      } catch (e) {
+        console.warn('[Audio] Silence detection not available:', e);
+      }
     } catch (error) {
       console.error("[Audio] Microphone access failed:", error);
       setAssistantMessage("Microphone access denied");
@@ -412,7 +490,7 @@ function App() {
 
           {/* Response Display Area - Gemini Style */}
           {assistantMessage && !isThinking && (
-            <div className="response-container">
+            <div className="response-container" role="status" aria-live="polite" aria-atomic="true" aria-label="Assistant response">
               <div className="response-message">
                 {assistantMessage}
               </div>

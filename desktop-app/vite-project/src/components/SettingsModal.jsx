@@ -141,9 +141,9 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
   };
 
   return (
-    <div className="settings-overlay">
-      <div className="settings-modal">
-        <button className="settings-close-btn" onClick={onClose}>
+    <div className="settings-overlay" role="presentation">
+      <div className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <button className="settings-close-btn" onClick={onClose} aria-label="Close settings">
           <X size={22} />
         </button>
 
@@ -174,13 +174,16 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
           <div className="settings-content">
             {activeSection === "profile" && (
               <div className="settings-section">
-                <h3 className="section-title">Profile Settings</h3>
+                <h3 className="section-title" id="settings-title">Profile Settings</h3>
                 <div className="settings-group">
                   <label className="settings-label">
                     Username
                     <input
+                      id="settings-username"
                       type="text"
                       className="settings-input"
+                      aria-label="Username"
+                      autoFocus
                       value={profileData.username}
                       onChange={(e) => handleProfileChange("username", e.target.value)}
                     />

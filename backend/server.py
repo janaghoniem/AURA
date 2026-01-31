@@ -27,7 +27,7 @@ from agents.utils.protocol import (
 from ThinkingStepManager import ThinkingStepManager
 from routes.device_routes import router as device_router
 from dotenv import load_dotenv
-import os
+import json
 from memory_api import router as memory_router
 
 load_dotenv()
@@ -652,7 +652,8 @@ async def thinking_stream(session_id: str):
                 try:
                     # Wait for thinking updates with timeout
                     step = await asyncio.wait_for(thinking_queue.get(), timeout=30)
-                    yield f"data: {step}\n\n"
+                    # Send JSON-formatted data so clients can parse safely
+                    yield f"data: {json.dumps({ 'step': step })}\n\n"
                 except asyncio.TimeoutError:
                     # Keep connection alive with heartbeat
                     yield ": heartbeat\n\n"
