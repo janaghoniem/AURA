@@ -95,3 +95,5 @@ backend/conversations.jsonl
 *.db
 vectordb/
 chromadb/
+backend/conversations.jsonl
+backend/chroma_db/chroma.sqlite3

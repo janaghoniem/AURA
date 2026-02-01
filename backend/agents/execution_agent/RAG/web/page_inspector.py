@@ -1,8 +1,9 @@
 # ============================================================================
-# PAGE INSPECTOR - DOM-AWARE CONTEXT FOR RAG (FIXED VERSION)
+# PAGE INSPECTOR - ENHANCED DOM-AWARE CONTEXT FOR RAG
 # ============================================================================
-# ✅ Added fallback when accessibility API fails
+# ✅ Fixed fallback when accessibility API fails
 # ✅ Better error handling for page semantics extraction
+# ✅ Enhanced element detection with multiple strategies
 
 import logging
 from typing import Dict, List, Optional
@@ -10,46 +11,68 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# FALLBACK PAGE SEMANTICS EXTRACTOR
+# ENHANCED FALLBACK PAGE SEMANTICS EXTRACTOR
 # ============================================================================
 
 async def get_page_semantics_fallback(page) -> str:
     """
-    Fallback method to extract page elements when accessibility API unavailable.
-    Uses direct DOM querying instead.
-    
-    Args:
-        page: Playwright Page object
-        
-    Returns:
-        String describing interactive elements on the page
+    Enhanced fallback method to extract page elements when accessibility API unavailable.
+    Uses multiple strategies to find interactive elements.
     """
     try:
-        logger.info("🔄 Using fallback method for page semantics")
+        logger.info("🔄 Using enhanced fallback method for page semantics")
         
-        # Extract interactive elements using evaluate
+        # Extract interactive elements using comprehensive evaluate
         elements_info = await page.evaluate("""
             () => {
-                const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+                // Strategy 1: Standard interactive elements
+                const buttons = Array.from(document.querySelectorAll('button, [role="button"], [type="button"], [type="submit"]'));
                 const links = Array.from(document.querySelectorAll('a[href]'));
                 const inputs = Array.from(document.querySelectorAll('input, textarea, select'));
                 
+                // Strategy 2: Media controls (video, audio)
+                const videoElements = Array.from(document.querySelectorAll('video'));
+                const audioElements = Array.from(document.querySelectorAll('audio'));
+                
+                // Strategy 3: Common UI patterns
+                const clickableElements = Array.from(document.querySelectorAll('[onclick], [data-action]'));
+                
                 return {
-                    buttons: buttons.slice(0, 10).map(el => ({
-                        text: el.textContent?.trim() || el.ariaLabel || el.title || 'Unnamed button',
-                        disabled: el.disabled || el.hasAttribute('disabled')
+                    buttons: buttons.slice(0, 15).map(el => ({
+                        text: el.textContent?.trim() || el.ariaLabel || el.title || el.getAttribute('data-tooltip') || 'Unnamed button',
+                        disabled: el.disabled || el.hasAttribute('disabled'),
+                        id: el.id || '',
+                        classes: el.className || '',
                     })),
-                    links: links.slice(0, 15).map(el => ({
+                    links: links.slice(0, 20).map(el => ({
                         text: el.textContent?.trim() || el.ariaLabel || el.title || 'Unnamed link',
-                        href: el.href
+                        href: el.href,
+                        id: el.id || '',
                     })),
-                    inputs: inputs.slice(0, 10).map(el => ({
+                    inputs: inputs.slice(0, 15).map(el => ({
                         type: el.type || el.tagName.toLowerCase(),
                         placeholder: el.placeholder || '',
                         value: el.value || '',
                         name: el.name || el.id || 'unnamed',
-                        disabled: el.disabled || el.hasAttribute('disabled')
-                    }))
+                        disabled: el.disabled || el.hasAttribute('disabled'),
+                        ariaLabel: el.ariaLabel || '',
+                    })),
+                    videos: videoElements.map(el => ({
+                        src: el.src || el.currentSrc || '',
+                        paused: el.paused,
+                        muted: el.muted,
+                        duration: el.duration,
+                        currentTime: el.currentTime,
+                    })),
+                    audios: audioElements.map(el => ({
+                        src: el.src || el.currentSrc || '',
+                        paused: el.paused,
+                        muted: el.muted,
+                    })),
+                    clickables: clickableElements.slice(0, 10).map(el => ({
+                        text: el.textContent?.trim() || el.ariaLabel || '',
+                        action: el.getAttribute('data-action') || el.getAttribute('onclick') || '',
+                    })),
                 };
             }
         """)
@@ -61,7 +84,8 @@ async def get_page_semantics_fallback(page) -> str:
             descriptions.append("BUTTONS:")
             for btn in elements_info['buttons']:
                 status = " (disabled)" if btn['disabled'] else ""
-                descriptions.append(f"  - '{btn['text']}'{status}")
+                id_info = f" #{btn['id']}" if btn['id'] else ""
+                descriptions.append(f"  - '{btn['text']}'{id_info}{status}")
         
         # Format inputs
         if elements_info.get('inputs'):
@@ -70,7 +94,8 @@ async def get_page_semantics_fallback(page) -> str:
                 status = " (disabled)" if inp['disabled'] else ""
                 value_info = f" [current: '{inp['value']}']" if inp['value'] else ""
                 placeholder_info = f" placeholder='{inp['placeholder']}'" if inp['placeholder'] else ""
-                descriptions.append(f"  - {inp['type']} ({inp['name']}){placeholder_info}{value_info}{status}")
+                aria_info = f" aria-label='{inp['ariaLabel']}'" if inp['ariaLabel'] else ""
+                descriptions.append(f"  - {inp['type']} ({inp['name']}){placeholder_info}{aria_info}{value_info}{status}")
         
         # Format links
         if elements_info.get('links'):
@@ -78,17 +103,36 @@ async def get_page_semantics_fallback(page) -> str:
             for link in elements_info['links']:
                 descriptions.append(f"  - '{link['text']}'")
         
+        # ✅ NEW: Format video elements
+        if elements_info.get('videos'):
+            descriptions.append("\nVIDEO ELEMENTS:")
+            for i, video in enumerate(elements_info['videos']):
+                status = "paused" if video['paused'] else "playing"
+                muted_status = "muted" if video['muted'] else "unmuted"
+                descriptions.append(f"  - Video {i+1}: {status}, {muted_status}")
+                if video['duration']:
+                    descriptions.append(f"    Duration: {video['duration']:.1f}s, Current: {video['currentTime']:.1f}s")
+        
+        # ✅ NEW: Format clickable elements
+        if elements_info.get('clickables'):
+            descriptions.append("\nOTHER CLICKABLE ELEMENTS:")
+            for el in elements_info['clickables']:
+                descriptions.append(f"  - '{el['text']}' (action: {el['action'][:30]})")
+        
         result = "\n".join(descriptions) if descriptions else "No interactive elements found on page"
         
-        logger.info(f"✅ Extracted {len(elements_info.get('buttons', []))} buttons, {len(elements_info.get('inputs', []))} inputs, {len(elements_info.get('links', []))} links")
+        logger.info(f"✅ Extracted {len(elements_info.get('buttons', []))} buttons, "
+                   f"{len(elements_info.get('inputs', []))} inputs, "
+                   f"{len(elements_info.get('links', []))} links, "
+                   f"{len(elements_info.get('videos', []))} videos")
         return result
         
     except Exception as e:
-        logger.error(f"❌ Fallback extraction failed: {e}")
+        logger.error(f"❌ Enhanced fallback extraction failed: {e}")
         return "Page semantics unavailable (both methods failed)"
 
 # ============================================================================
-# PRIMARY PAGE SEMANTICS EXTRACTOR (WITH FALLBACK)
+# PRIMARY PAGE SEMANTICS EXTRACTOR (WITH ENHANCED FALLBACK)
 # ============================================================================
 
 async def get_page_semantics(page) -> str:
@@ -96,13 +140,7 @@ async def get_page_semantics(page) -> str:
     Extract actionable elements from the current page.
     Returns natural language description for RAG context.
     
-    ✅ FIXED: Now uses fallback when accessibility API fails
-    
-    Args:
-        page: Playwright Page object
-        
-    Returns:
-        String describing interactive elements on the page
+    ✅ ENHANCED: Better fallback handling and element detection
     """
     
     try:
@@ -127,21 +165,29 @@ async def get_page_semantics(page) -> str:
         
         def extract_elements(node, depth=0):
             """Recursively extract interactive elements from accessibility tree"""
-            if depth > 3:  # Limit depth to avoid overwhelming context
+            if depth > 3:
                 return
             
             role = node.get('role', '')
             name = node.get('name', '')
             
-            # Only include interactive elements that users can act upon
-            if role in ['button', 'link', 'textbox', 'searchbox', 'combobox', 
-                       'tab', 'menuitem', 'checkbox', 'radio', 'slider']:
+            # ✅ ENHANCED: More role types
+            interactive_roles = [
+                'button', 'link', 'textbox', 'searchbox', 'combobox',
+                'tab', 'menuitem', 'checkbox', 'radio', 'slider',
+                'switch', 'option', 'listitem', 'treeitem',
+                # Media roles
+                'application', 'document', 'main',
+            ]
+            
+            if role in interactive_roles:
                 elements.append({
                     'role': role,
                     'label': name,
                     'enabled': not node.get('disabled', False),
                     'focused': node.get('focused', False),
-                    'value': node.get('value', '')
+                    'value': node.get('value', ''),
+                    'level': depth,
                 })
             
             # Recurse into children
@@ -157,24 +203,31 @@ async def get_page_semantics(page) -> str:
         buttons = [e for e in elements if e['role'] == 'button']
         links = [e for e in elements if e['role'] == 'link']
         inputs = [e for e in elements if e['role'] in ['textbox', 'searchbox', 'combobox']]
+        other_interactive = [e for e in elements if e['role'] not in ['button', 'link', 'textbox', 'searchbox', 'combobox']]
         
         if buttons:
             descriptions.append("BUTTONS:")
-            for btn in buttons[:10]:  # Limit to top 10
+            for btn in buttons[:15]:  # Increased from 10
                 status = "" if btn['enabled'] else " (disabled)"
-                descriptions.append(f"  - '{btn['label']}'{status}")
+                focus = " [FOCUSED]" if btn['focused'] else ""
+                descriptions.append(f"  - '{btn['label']}'{status}{focus}")
         
         if inputs:
             descriptions.append("\nINPUT FIELDS:")
-            for inp in inputs[:10]:
+            for inp in inputs[:15]:  # Increased from 10
                 status = "" if inp['enabled'] else " (disabled)"
                 value_info = f" [current: '{inp['value']}']" if inp['value'] else ""
                 descriptions.append(f"  - {inp['role']}: '{inp['label']}'{status}{value_info}")
         
         if links:
             descriptions.append("\nLINKS:")
-            for link in links[:15]:  # Limit to top 15
+            for link in links[:20]:  # Increased from 15
                 descriptions.append(f"  - '{link['label']}'")
+        
+        if other_interactive:
+            descriptions.append("\nOTHER INTERACTIVE ELEMENTS:")
+            for elem in other_interactive[:10]:
+                descriptions.append(f"  - {elem['role']}: '{elem['label']}'")
         
         result = "\n".join(descriptions) if descriptions else "No interactive elements found on page"
         
@@ -183,12 +236,10 @@ async def get_page_semantics(page) -> str:
         
     except Exception as e:
         logger.error(f"❌ Unexpected error in get_page_semantics: {e}")
-        # Last resort fallback
         return await get_page_semantics_fallback(page)
 
-
 # ============================================================================
-# REST OF FILE UNCHANGED - keeping original functions
+# ENHANCED PAGE CONTEXT FUNCTIONS
 # ============================================================================
 
 async def get_page_context(page) -> Dict:
@@ -205,13 +256,17 @@ async def get_page_context(page) -> Dict:
         # Check if page is loaded
         ready_state = await page.evaluate("() => document.readyState")
         
+        # ✅ NEW: Detect page type
+        page_type = await detect_page_type(page)
+        
         return {
             'url': url,
             'title': title,
             'semantics': semantics,
             'viewport': viewport,
             'ready_state': ready_state,
-            'is_loaded': ready_state == 'complete'
+            'is_loaded': ready_state == 'complete',
+            'page_type': page_type,  # ✅ NEW
         }
     
     except Exception as e:
@@ -224,6 +279,42 @@ async def get_page_context(page) -> Dict:
             'error': str(e)
         }
 
+async def detect_page_type(page) -> str:
+    """
+    ✅ NEW: Detect what type of page this is to help with smart intent.
+    """
+    try:
+        page_info = await page.evaluate("""
+            () => {
+                const url = window.location.href;
+                const hostname = window.location.hostname;
+                
+                return {
+                    isYouTube: hostname.includes('youtube.com'),
+                    isVideo: !!document.querySelector('video'),
+                    isAudio: !!document.querySelector('audio'),
+                    isForm: !!document.querySelector('form'),
+                    isSearch: !!document.querySelector('input[type="search"], input[placeholder*="search" i]'),
+                };
+            }
+        """)
+        
+        if page_info.get('isYouTube'):
+            return 'youtube'
+        elif page_info.get('isVideo'):
+            return 'video'
+        elif page_info.get('isAudio'):
+            return 'audio'
+        elif page_info.get('isForm'):
+            return 'form'
+        elif page_info.get('isSearch'):
+            return 'search'
+        else:
+            return 'general'
+            
+    except Exception as e:
+        logger.debug(f"Could not detect page type: {e}")
+        return 'unknown'
 
 async def wait_for_page_stable(page, timeout: int = 5000):
     """Wait for page to be stable (network idle + DOM mutations settled)."""
@@ -236,7 +327,6 @@ async def wait_for_page_stable(page, timeout: int = 5000):
     except Exception as e:
         logger.debug(f"⚠️ Page may not be fully stable: {e}")
 
-
 async def element_exists(page, selector: str, timeout: int = 2000) -> bool:
     """Check if an element exists on the page."""
     try:
@@ -244,7 +334,6 @@ async def element_exists(page, selector: str, timeout: int = 2000) -> bool:
         return True
     except:
         return False
-
 
 async def get_element_info(page, selector: str) -> Optional[Dict]:
     """Get detailed information about an element."""
@@ -266,7 +355,8 @@ async def get_element_info(page, selector: str) -> Optional[Dict]:
                     class: el.className,
                     type: el.type,
                     placeholder: el.placeholder,
-                    ariaLabel: el.getAttribute('aria-label')
+                    ariaLabel: el.getAttribute('aria-label'),
+                    dataAction: el.getAttribute('data-action'),
                 }
             })
         """)
@@ -276,7 +366,6 @@ async def get_element_info(page, selector: str) -> Optional[Dict]:
     except Exception as e:
         logger.debug(f"Could not get element info: {e}")
         return None
-
 
 async def suggest_selectors(page, description: str) -> List[str]:
     """Suggest possible selectors based on natural language description."""
@@ -291,17 +380,19 @@ async def suggest_selectors(page, description: str) -> List[str]:
             'input[aria-label*="search" i]',
             'button[aria-label*="search" i]',
             '#search',
-            '.search-box'
+            '.search-box',
+            '[data-action*="search"]',
         ])
     
-    if 'button' in keywords:
+    if 'button' in keywords or 'click' in keywords:
         label_words = [w for w in keywords if w not in ['button', 'click', 'the', 'a']]
         if label_words:
             label = ' '.join(label_words)
             selectors.extend([
                 f'button:has-text("{label}")',
                 f'button[aria-label*="{label}" i]',
-                f'[role="button"]:has-text("{label}")'
+                f'[role="button"]:has-text("{label}")',
+                f'[data-action*="{label}"]',
             ])
     
     if 'link' in keywords:
@@ -310,16 +401,53 @@ async def suggest_selectors(page, description: str) -> List[str]:
             label = ' '.join(label_words)
             selectors.extend([
                 f'a:has-text("{label}")',
-                f'[role="link"]:has-text("{label}")'
+                f'[role="link"]:has-text("{label}")',
             ])
+    
+    # ✅ NEW: Media control selectors
+    if any(word in keywords for word in ['play', 'pause', 'video', 'media']):
+        selectors.extend([
+            'video',
+            '[data-action="play"]',
+            '[data-action="pause"]',
+            '.ytp-play-button',  # YouTube
+            'button[aria-label*="play" i]',
+            'button[aria-label*="pause" i]',
+        ])
+    
+    if any(word in keywords for word in ['mute', 'volume', 'sound']):
+        selectors.extend([
+            '[data-action="mute"]',
+            'button[aria-label*="mute" i]',
+            'button[aria-label*="volume" i]',
+            '.ytp-mute-button',  # YouTube
+        ])
     
     return selectors
 
-
 async def build_rag_context(page, task_description: str) -> str:
-    """Build complete context string for RAG prompt."""
+    """
+    Build complete context string for RAG prompt.
+    ✅ ENHANCED: Includes page type and smart intent guidance.
+    """
     
     context = await get_page_context(page)
+    
+    # ✅ NEW: Add page type specific guidance
+    page_type_guidance = ""
+    if context.get('page_type') == 'youtube':
+        page_type_guidance = """
+📺 YOUTUBE DETECTED - Special Guidelines:
+- For media controls, prefer keyboard shortcuts over clicking UI elements
+- Keyboard shortcuts: k=play/pause, m=mute, Shift+N=next video
+- UI elements may be hidden or localized - use shortcuts when possible
+"""
+    elif context.get('page_type') == 'video':
+        page_type_guidance = """
+🎬 VIDEO PAGE DETECTED:
+- Video element is present - direct video manipulation available
+- Can use page.evaluate() to control video: video.paused, video.muted, etc.
+"""
     
     context_parts = [
         "="*80,
@@ -327,7 +455,10 @@ async def build_rag_context(page, task_description: str) -> str:
         "="*80,
         f"URL: {context['url']}",
         f"Title: {context['title']}",
+        f"Page Type: {context.get('page_type', 'unknown')}",
         f"Page Loaded: {context['is_loaded']}",
+        "",
+        page_type_guidance,
         "",
         "AVAILABLE INTERACTIVE ELEMENTS:",
         context['semantics'],
@@ -337,16 +468,18 @@ async def build_rag_context(page, task_description: str) -> str:
         "="*80,
         task_description,
         "",
-        "CRITICAL RULES:",
-        "1. Use ONLY elements that exist in the list above",
-        "2. If required element is NOT listed, print 'FAILED: Element not found'",
-        "3. Do not hallucinate selectors - verify element exists first",
-        "4. Print 'EXECUTION_SUCCESS' only when action truly succeeds",
+        "ENHANCED RULES:",
+        "1. PRIMARY: Use ONLY elements that exist in the list above",
+        "2. SMART INTENT: If element not listed:",
+        "   - For YouTube/Video: Use keyboard shortcuts (k, m, Shift+N, etc.)",
+        "   - For other missing elements: Use page.evaluate() to manipulate DOM directly",
+        "   - Try alternative selectors (aria-label, data-action, etc.)",
+        "3. SUCCESS: Print 'EXECUTION_SUCCESS' only when intended outcome achieved",
+        "4. FAILURE: Print 'FAILED: [reason]' if element truly doesn't exist",
         ""
     ]
     
     return "\n".join(context_parts)
-
 
 async def detect_video_player(page) -> Optional[Dict]:
     """Detect video player on page and its state."""
@@ -364,7 +497,10 @@ async def detect_video_player(page) -> Optional[Dict]:
                     duration: video.duration,
                     playing: !video.paused && video.currentTime > 0,
                     muted: video.muted,
-                    volume: video.volume
+                    volume: video.volume,
+                    ended: video.ended,
+                    readyState: video.readyState,
+                    src: video.src || video.currentSrc,
                 };
             }
         """)
@@ -373,4 +509,48 @@ async def detect_video_player(page) -> Optional[Dict]:
         
     except Exception as e:
         logger.debug(f"No video player found: {e}")
+        return None
+
+# ============================================================================
+# ✅ NEW: YOUTUBE-SPECIFIC HELPERS
+# ============================================================================
+
+async def get_youtube_player_state(page) -> Optional[Dict]:
+    """
+    Get YouTube player state specifically.
+    Useful for detecting playlists, player mode, etc.
+    """
+    try:
+        yt_state = await page.evaluate("""
+            () => {
+                // Check if YouTube
+                if (!window.location.hostname.includes('youtube.com')) {
+                    return null;
+                }
+                
+                const player = document.querySelector('#movie_player');
+                const video = document.querySelector('video');
+                
+                if (!player) return null;
+                
+                return {
+                    isYouTube: true,
+                    hasPlayer: true,
+                    isPlaylist: !!document.querySelector('[aria-label*="playlist" i], #playlist'),
+                    playerMode: player.className.includes('ytp-fullscreen') ? 'fullscreen' : 'normal',
+                    controlsVisible: !!document.querySelector('.ytp-chrome-bottom:not(.ytp-autohide)'),
+                    video: video ? {
+                        paused: video.paused,
+                        muted: video.muted,
+                        currentTime: video.currentTime,
+                        duration: video.duration,
+                    } : null,
+                };
+            }
+        """)
+        
+        return yt_state
+        
+    except Exception as e:
+        logger.debug(f"Not a YouTube page or error: {e}")
         return None

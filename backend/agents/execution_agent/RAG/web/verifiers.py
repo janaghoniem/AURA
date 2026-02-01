@@ -1,10 +1,13 @@
 # ============================================================================
-# POST-ACTION VERIFIERS - CLOSED-LOOP AUTOMATION
+# ENHANCED POST-ACTION VERIFIERS - CLOSED-LOOP AUTOMATION
 # ============================================================================
-# Verifies that actions actually succeeded by checking observable outcomes
+# ✅ Verifies that actions actually succeeded by checking observable outcomes
+# ✅ Enhanced media control verification
+# ✅ State comparison verification
+# ✅ False success detection
 
 import logging
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, Tuple, Optional, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +23,11 @@ async def verify_action(
     """
     Verify that an action actually succeeded.
     
+    ✅ ENHANCED: More comprehensive verification including state comparison
+    
     Args:
         page: Playwright Page object
-        action_type: Type of action performed (navigate, click, fill, etc.)
+        action_type: Type of action performed
         context: Context dictionary with action details
         
     Returns:
@@ -47,6 +52,10 @@ async def verify_action(
         elif action_type == "extract":
             return await verify_extraction(page, context)
         
+        # ✅ NEW: Media control verifications
+        elif action_type in ["pause", "play", "mute", "unmute", "skip", "next"]:
+            return await verify_media_control(page, action_type, context)
+        
         else:
             # Default: assume success if no specific verification
             logger.debug(f"⚠️ No specific verification for action type: {action_type}")
@@ -56,9 +65,96 @@ async def verify_action(
         logger.error(f"❌ Verification error: {e}")
         return False, f"Verification failed with error: {str(e)}"
 
+# ============================================================================
+# ✅ NEW: MEDIA CONTROL VERIFICATION
+# ============================================================================
+
+async def verify_media_control(page, action: str, context: Dict) -> Tuple[bool, str]:
+    """
+    Verify media control actions (pause, play, mute, etc.).
+    Checks actual video element state.
+    """
+    
+    try:
+        # Wait for any transitions
+        await page.wait_for_timeout(500)
+        
+        video_state = await page.evaluate("""
+            () => {
+                const video = document.querySelector('video');
+                if (!video) {
+                    return { found: false };
+                }
+                
+                return {
+                    found: true,
+                    paused: video.paused,
+                    muted: video.muted,
+                    currentTime: video.currentTime,
+                    duration: video.duration,
+                    volume: video.volume,
+                    ended: video.ended,
+                    playing: !video.paused && video.currentTime > 0,
+                };
+            }
+        """)
+        
+        if not video_state.get('found'):
+            return False, "No video element found on page"
+        
+        action_lower = action.lower()
+        
+        # Verify pause
+        if 'pause' in action_lower:
+            if video_state.get('paused'):
+                return True, "✅ Video is paused"
+            else:
+                return False, "Video is still playing (pause failed)"
+        
+        # Verify play
+        elif 'play' in action_lower:
+            if video_state.get('playing'):
+                return True, "✅ Video is playing"
+            else:
+                return False, "Video is still paused (play failed)"
+        
+        # Verify mute
+        elif 'mute' in action_lower:
+            if video_state.get('muted'):
+                return True, "✅ Video is muted"
+            else:
+                return False, "Video is not muted (mute failed)"
+        
+        # Verify unmute
+        elif 'unmute' in action_lower:
+            if not video_state.get('muted'):
+                return True, "✅ Video is unmuted"
+            else:
+                return False, "Video is still muted (unmute failed)"
+        
+        # ✅ NEW: Verify skip/next (check time change or URL change)
+        elif any(word in action_lower for word in ['skip', 'next']):
+            # For playlists, URL should change
+            # For single video, can't really verify without "before" state
+            url_before = context.get('url_before')
+            url_after = page.url
+            
+            if url_before and url_before != url_after:
+                return True, f"✅ Navigated to next video: {url_after}"
+            
+            # Check if video time jumped (might indicate skip within video)
+            if video_state.get('currentTime', 0) > 5:
+                return True, "✅ Video position changed (possibly skipped)"
+            
+            return False, "Could not verify skip action (no URL change or time jump)"
+        
+        return True, f"Media control '{action}' executed (state: {video_state})"
+        
+    except Exception as e:
+        return False, f"Media control verification failed: {str(e)}"
 
 # ============================================================================
-# SPECIFIC VERIFIERS
+# EXISTING VERIFIERS (ENHANCED)
 # ============================================================================
 
 async def verify_navigation(page, context: Dict) -> Tuple[bool, str]:
@@ -84,7 +180,6 @@ async def verify_navigation(page, context: Dict) -> Tuple[bool, str]:
         
     except Exception as e:
         return False, f"Navigation verification failed: {str(e)}"
-
 
 async def verify_fill(page, context: Dict) -> Tuple[bool, str]:
     """Verify that text was entered into input field"""
@@ -116,7 +211,6 @@ async def verify_fill(page, context: Dict) -> Tuple[bool, str]:
         
     except Exception as e:
         return False, f"Fill verification failed: {str(e)}"
-
 
 async def verify_click(page, context: Dict) -> Tuple[bool, str]:
     """Verify that click action caused expected change"""
@@ -150,7 +244,6 @@ async def verify_click(page, context: Dict) -> Tuple[bool, str]:
     
     except Exception as e:
         return False, f"Click verification error: {str(e)}"
-
 
 async def verify_video_playback(page, context: Dict) -> Tuple[bool, str]:
     """Verify that video is actually playing"""
@@ -195,7 +288,6 @@ async def verify_video_playback(page, context: Dict) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Video playback verification failed: {str(e)}"
 
-
 async def verify_extraction(page, context: Dict) -> Tuple[bool, str]:
     """Verify that data extraction succeeded"""
     
@@ -226,7 +318,6 @@ async def verify_extraction(page, context: Dict) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Extraction verification failed: {str(e)}"
 
-
 # ============================================================================
 # ADVANCED VERIFIERS
 # ============================================================================
@@ -240,7 +331,6 @@ async def verify_element_exists(page, selector: str, timeout: int = 2000) -> Tup
     except:
         return False, f"Element not found or not visible: {selector}"
 
-
 async def verify_text_visible(page, text: str, timeout: int = 2000) -> Tuple[bool, str]:
     """Verify that specific text is visible on page"""
     
@@ -250,7 +340,6 @@ async def verify_text_visible(page, text: str, timeout: int = 2000) -> Tuple[boo
     except:
         return False, f"Text not found: '{text}'"
 
-
 async def verify_url_contains(page, substring: str) -> Tuple[bool, str]:
     """Verify that current URL contains substring"""
     
@@ -258,7 +347,6 @@ async def verify_url_contains(page, substring: str) -> Tuple[bool, str]:
     if substring.lower() in current_url.lower():
         return True, f"URL contains '{substring}': {current_url}"
     return False, f"URL does not contain '{substring}': {current_url}"
-
 
 async def verify_page_loaded(page, timeout: int = 5000) -> Tuple[bool, str]:
     """Verify that page is fully loaded"""
@@ -275,6 +363,125 @@ async def verify_page_loaded(page, timeout: int = 5000) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Page load verification failed: {str(e)}"
 
+# ============================================================================
+# ✅ NEW: STATE COMPARISON VERIFIERS
+# ============================================================================
+
+async def verify_state_change(
+    page, 
+    state_before: Dict, 
+    state_after: Dict, 
+    expected_changes: List[str]
+) -> Tuple[bool, str]:
+    """
+    Verify that specific state changes occurred.
+    
+    Args:
+        page: Playwright page
+        state_before: Page state before action
+        state_after: Page state after action
+        expected_changes: List of expected change types
+        
+    Returns:
+        (success, message)
+    """
+    
+    try:
+        changes_detected = []
+        changes_missing = []
+        
+        for change_type in expected_changes:
+            if change_type == 'url':
+                if state_before.get('url') != state_after.get('url'):
+                    changes_detected.append(f"URL changed: {state_after.get('url')}")
+                else:
+                    changes_missing.append('URL did not change')
+            
+            elif change_type == 'video_paused':
+                video_before = state_before.get('video', {})
+                video_after = state_after.get('video', {})
+                
+                if video_before.get('paused') != video_after.get('paused'):
+                    changes_detected.append(f"Video paused state changed: {video_after.get('paused')}")
+                else:
+                    changes_missing.append('Video paused state did not change')
+            
+            elif change_type == 'video_muted':
+                video_before = state_before.get('video', {})
+                video_after = state_after.get('video', {})
+                
+                if video_before.get('muted') != video_after.get('muted'):
+                    changes_detected.append(f"Video muted state changed: {video_after.get('muted')}")
+                else:
+                    changes_missing.append('Video muted state did not change')
+            
+            elif change_type == 'focus':
+                if state_before.get('activeElement') != state_after.get('activeElement'):
+                    changes_detected.append(f"Focus changed to: {state_after.get('activeElement')}")
+                else:
+                    changes_missing.append('Focus did not change')
+        
+        if changes_missing:
+            return False, f"Expected changes not detected: {', '.join(changes_missing)}"
+        
+        if changes_detected:
+            return True, f"Verified changes: {', '.join(changes_detected)}"
+        
+        return True, "No specific changes expected, action completed"
+        
+    except Exception as e:
+        return False, f"State comparison failed: {str(e)}"
+
+async def verify_video_state(
+    page,
+    expected_state: Dict[str, Any]
+) -> Tuple[bool, str]:
+    """
+    Verify video element is in expected state.
+    
+    Args:
+        page: Playwright page
+        expected_state: Dict with expected properties (paused, muted, etc.)
+        
+    Returns:
+        (success, message)
+    """
+    
+    try:
+        actual_state = await page.evaluate("""
+            () => {
+                const video = document.querySelector('video');
+                if (!video) return null;
+                
+                return {
+                    paused: video.paused,
+                    muted: video.muted,
+                    volume: video.volume,
+                    currentTime: video.currentTime,
+                    duration: video.duration,
+                    ended: video.ended,
+                };
+            }
+        """)
+        
+        if not actual_state:
+            return False, "No video element found"
+        
+        mismatches = []
+        
+        for key, expected_value in expected_state.items():
+            actual_value = actual_state.get(key)
+            
+            if actual_value != expected_value:
+                mismatches.append(f"{key}: expected {expected_value}, got {actual_value}")
+        
+        if mismatches:
+            return False, f"Video state mismatch: {', '.join(mismatches)}"
+        
+        return True, f"Video state matches expected: {expected_state}"
+        
+    except Exception as e:
+        return False, f"Video state verification failed: {str(e)}"
 
 # ============================================================================
 # COMPOSITE VERIFIERS
@@ -320,7 +527,6 @@ async def verify_search_executed(page, context: Dict) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Search verification failed: {str(e)}"
 
-
 async def verify_form_submitted(page, context: Dict) -> Tuple[bool, str]:
     """Verify that form was submitted successfully"""
     
@@ -359,7 +565,6 @@ async def verify_form_submitted(page, context: Dict) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Form submission verification failed: {str(e)}"
 
-
 # ============================================================================
 # VERIFICATION HELPERS
 # ============================================================================
@@ -387,7 +592,6 @@ def parse_verification_result(stdout: str) -> Tuple[bool, str]:
     # No clear indicator
     return False, "No success indicator found in output"
 
-
 async def get_page_state_snapshot(page) -> Dict:
     """
     Get snapshot of current page state for comparison.
@@ -413,7 +617,6 @@ async def get_page_state_snapshot(page) -> Dict:
     except Exception as e:
         logger.debug(f"Could not get page snapshot: {e}")
         return {}
-
 
 async def compare_page_states(before: Dict, after: Dict) -> Dict:
     """
