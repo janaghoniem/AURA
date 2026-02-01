@@ -94,3 +94,5 @@ class Channels:
     BROADCAST = "broadcast"  # For status updates
     SESSION_CONTROL = "session_control"
     PREFERENCE_STORAGE = "preference_storage"
+    
+    INTERRUPT_CONTROL="interrupt_control"

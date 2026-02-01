@@ -92,7 +92,7 @@ class RAGTaskAdapter:
                 query_parts.append(f"Input data: {task.extra_params['input_content'][:200]}...")
         
         if task.context == "local":
-            query_parts.append("(pywinauto/pyautogui desktop automation)")
+            query_parts.append("(desktop automation)")
         elif task.context == "web":
             query_parts.append("(Playwright web automation)")
         
@@ -368,27 +368,27 @@ class CoordinatorRAGBridge:
             
             return code
     
-    async def execute_action_task(
-        self,
-        task: ActionTask,
-        max_retries: int = 3,
-        enable_cache: bool = False,  # Enable cache by default
-        cache_threshold: float = 0.85
-    ) -> TaskResult:
-        """
-        Execute a single ActionTask using RAG pipeline with cache support
+    # async def execute_action_task(
+    #     self,
+    #     task: ActionTask,
+    #     max_retries: int = 3,
+    #     enable_cache: bool = False,  # Enable cache by default
+    #     cache_threshold: float = 0.85
+    # ) -> TaskResult:
+    #     """
+    #     Execute a single ActionTask using RAG pipeline with cache support
         
-        Args:
-            task: ActionTask from coordinator
-            max_retries: Maximum retry attempts
-            enable_cache: Whether to check/use cache
-            cache_threshold: Similarity threshold for cache hit (0.85 = 85%)
+    #     Args:
+    #         task: ActionTask from coordinator
+    #         max_retries: Maximum retry attempts
+    #         enable_cache: Whether to check/use cache
+    #         cache_threshold: Similarity threshold for cache hit (0.85 = 85%)
             
-        Returns:
-            TaskResult for coordinator
-        """
-        logger.info(f"🔄 Processing task {task.task_id}: {task.ai_prompt[:50]}...")
-    async def execute_action_task(self, task: ActionTask, max_retries: int = 1, enable_cache: bool = False) -> TaskResult:
+    #     Returns:
+    #         TaskResult for coordinator
+    #     """
+    #     logger.info(f"🔄 Processing task {task.task_id}: {task.ai_prompt[:50]}...")
+    async def execute_action_task(self, task: ActionTask, max_retries: int = 3, enable_cache: bool = False) -> TaskResult:
         logger.info(f"🖥️ Processing DESKTOP task {task.task_id}: {task.ai_prompt[:50]}...")
         
         # Only process action tasks
