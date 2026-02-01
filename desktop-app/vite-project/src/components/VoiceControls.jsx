@@ -28,6 +28,8 @@ const VoiceControls = ({
             type="text"
             placeholder="Type your message..."
             className="chat-input"
+            aria-label="Chat message input"
+            role="textbox"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -53,8 +55,8 @@ const VoiceControls = ({
   }
 
   return (
-    <div className={`voice-controls ${isRecording ? "recording" : ""}`}>
-      <button className="control-btn" onClick={onCancel}>
+    <div className={`voice-controls ${isRecording ? "recording" : ""}`} role="region" aria-label="Voice controls">
+      <button className="control-btn" onClick={onCancel} aria-label="Cancel" title="Cancel">
         <X size={20} />
       </button>
 
@@ -62,6 +64,10 @@ const VoiceControls = ({
         className="mic-btn"
         onClick={onMicClick}
         disabled={orbState === "processing" || orbState === "speaking"}
+        aria-label={isRecording ? "Stop recording" : "Activate microphone"}
+        aria-pressed={isRecording}
+        role="button"
+        title={isRecording ? "Stop recording" : "Activate microphone"}
       >
         <Mic size={22} />
       </button>
@@ -69,6 +75,8 @@ const VoiceControls = ({
       <button 
         className="control-btn"
         onClick={onSettingsClick}
+        aria-label="Settings"
+        title="Open settings"
       >
         <Settings size={20} />
       </button>
