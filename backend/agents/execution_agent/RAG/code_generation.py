@@ -521,6 +521,7 @@ class RAGSystem:
         
         print(f"\n[{'5/3' if use_rag else '4/3'}] ✅ Code generation complete")
         print(f"       Generated {len(result['code'])} characters of code")
+        print("THE CODE BLOCK ", result['code'])
         print(f"       RAG contexts used: {result['contexts_used']}")
         if result['contexts_used'] > 0:
             print(f"       Top similarity: {result['top_similarity']:.2%}")
@@ -612,16 +613,16 @@ Task Description:""")
 Requirements
 
 Execute the task exactly as described, without adding extra steps.
-
 Prefer the simplest and most reliable execution method.
-
 If the primary method fails, automatically adapt and try alternative approaches.
-
 Do not assume success—ensure the task is actually performed.
-
 The code must be suitable for use within a multi-agent automation system.
-
 Return only the generated code and necessary explanations, with no assumptions beyond the task description.
+Implementation guidance:
+- Prefer approaches similar to pyautogui-style interaction
+  (keyboard and mouse simulation) when applicable.
+- Do not assume the availability of libraries beyond standard Python
+  or those implied by the retrieved context.
 """)
         
         return "\n".join(prompt_parts)
@@ -646,14 +647,22 @@ Reliability is more important than cleverness.
 EXECUTION CONTEXT AWARENESS (MANDATORY)
 ================================================================================
 
-- This code is part of an automated execution agent, NOT a script runner.
-- Your output may be:
-  - Executed multiple times
-  - Compared against cached actions
-  - Automatically validated based on observable behavior
-- Assume NO prior execution state.
-- Assume NO application or system state unless explicitly provided.
-- Treat every request as fully independent and stateless.
+- This code is part of a multi-step automation pipeline.
+- If this task reaches code generation, all prior tasks in the same execution
+  chain have already completed successfully and were validated.
+
+YOU MAY ASSUME:
+- The system state reflects the successful completion of previous steps.
+- Any application opened or focused by prior tasks remains open and focused.
+- Files, windows, selections, or UI state created earlier still exist unless
+  explicitly modified by the current task.
+
+YOU MUST NOT:
+- Re-open applications unless explicitly requested.
+- Re-focus, reset, or recreate windows unless required by the task.
+- Undo, override, or repeat actions already completed in previous steps.
+
+For first-step or standalone tasks, assume no prior state.
 
 ================================================================================
 CORE GENERATION PRINCIPLES
@@ -662,15 +671,13 @@ CORE GENERATION PRINCIPLES
 1. STRICT INTENT ADHERENCE
 - Perform ONLY the action explicitly requested by the user.
 - Do NOT infer setup, cleanup, follow-up, or helper actions.
-- Do NOT assume missing context.
-- Do NOT chain steps unless the user explicitly asks for multiple actions.
+- Do NOT expand the scope of the task.
+- Do NOT chain multiple actions unless explicitly instructed.
 
-2. STATELESS & INDEPENDENT EXECUTION
-- Never assume:
-  - An application is already open
-  - A window is focused
-  - A previous task succeeded or failed
-- Never rely on history, memory, or prior executions.
+2. STATE-AWARE EXECUTION
+- Respect the current system state implied by prior validated steps.
+- Do NOT introduce defensive behavior that alters existing state.
+- Never assume failure when the task has already reached execution.
 
 3. SIMPLE-FIRST EXECUTION STRATEGY
 - Always prefer the most:
@@ -682,15 +689,154 @@ CORE GENERATION PRINCIPLES
 - Avoid:
   - Hardcoded file paths
   - Application binaries
-  - Rare or app-specific shortcuts
-  - Deep or brittle UI trees unless required
+  - App-specific internals
+  - Deep or brittle UI trees unless strictly necessary
 
 4. ADAPTIVE EXECUTION MINDSET
-- Assume no single perfect method always exists.
-- Prefer:
+- Assume no single method is universally reliable.
+- Prefer human-like interaction patterns:
   1. Keyboard-driven interaction
-  2. UI automation only if keyboard interaction is insufficient
-- Choose approaches that resemble how a real user would perform the task.
+  2. Mouse or UI interaction only when required
+- Adapt only when the primary approach fails.
+
+================================================================================
+CRITICAL - DATA EXTRACTION AND OUTPUT RULES (NON-NEGOTIABLE)
+================================================================================
+
+When your code performs data extraction, copying, reading, or retrieval:
+
+**YOU MUST OUTPUT THE ACTUAL DATA BEFORE ANY STATUS MESSAGE**
+
+This is CRITICAL for multi-step workflows where subsequent tasks depend on your output.
+
+✅ CORRECT PATTERN:
+```python
+# Extract/copy/read the data
+content = pyperclip.paste()  # or file.read(), or extracted_data, etc.
+
+# OUTPUT THE ACTUAL DATA FIRST
+print(content)
+
+# THEN print success indicator
+print("EXECUTION_SUCCESS")
+```
+
+❌ WRONG PATTERN (DATA IS LOST):
+```python
+content = pyperclip.paste()
+if content:
+    print("EXECUTION_SUCCESS")  # ← Only status message, actual data is lost!
+```
+
+**Why this matters:**
+- The next task in the pipeline receives your printed output as its input
+- If you only print "EXECUTION_SUCCESS", the next task receives an empty string
+- The entire workflow fails silently
+- Always output data BEFORE status messages
+
+**Specific Examples:**
+
+COPYING FILE CONTENT:
+```python
+import pyautogui
+import pyperclip
+import time
+
+try:
+    # Select all and copy
+    pyautogui.hotkey('ctrl', 'a')
+    time.sleep(0.2)
+    pyautogui.hotkey('ctrl', 'c')
+    time.sleep(0.2)
+    
+    # Get the copied content
+    content = pyperclip.paste()
+    
+    # OUTPUT THE ACTUAL CONTENT FIRST
+    print(content)
+    
+    # THEN indicate success
+    print("EXECUTION_SUCCESS")
+except Exception as e:
+    print(f"FAILED: {{e}}")
+```
+
+READING A FILE:
+```python
+import os
+
+try:
+    filepath = "D:/Downloads/file.txt"
+    
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"File not found: {{filepath}}")
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # OUTPUT THE FILE CONTENT FIRST
+    print(content)
+    
+    # THEN indicate success
+    print("EXECUTION_SUCCESS")
+except Exception as e:
+    print(f"FAILED: {{e}}")
+```
+
+EXTRACTING TEXT FROM UI:
+```python
+import pyautogui
+import pyperclip
+import time
+
+try:
+    # Select text
+    pyautogui.hotkey('ctrl', 'a')
+    time.sleep(0.1)
+    
+    # Copy to clipboard
+    pyautogui.hotkey('ctrl', 'c')
+    time.sleep(0.2)
+    
+    # Extract from clipboard
+    extracted_text = pyperclip.paste()
+    
+    # OUTPUT THE EXTRACTED TEXT FIRST
+    print(extracted_text)
+    
+    # THEN indicate success
+    print("EXECUTION_SUCCESS")
+except Exception as e:
+    print(f"FAILED: "{{e}}")
+```
+
+WEB SCRAPING / DATA EXTRACTION:
+```python
+# Whatever extraction method you use...
+extracted_data = element.get_text()
+
+# OUTPUT THE EXTRACTED DATA FIRST
+print(extracted_data)
+
+# THEN indicate success
+print("EXECUTION_SUCCESS")
+```
+
+**Remember:**
+- Data output FIRST
+- Status message SECOND
+- This applies to ANY task that extracts, copies, reads, or retrieves information
+- Failure to follow this pattern breaks the entire workflow
+
+================================================================================
+LIBRARY USAGE RULES
+================================================================================
+
+- Use only Python libraries that are part of the standard Python ecosystem
+  or clearly implied by the execution context.
+- Do NOT invent, guess, or assume the availability of libraries.
+- If a capability is unavailable, fail explicitly instead of guessing.
+- Do NOT rely on system-level execution or process spawning.
 
 ================================================================================
 FORBIDDEN EXECUTION METHODS (HARD RULES)
@@ -702,30 +848,25 @@ FORBIDDEN EXECUTION METHODS (HARD RULES)
   - os.startfile
   - shell commands
   - PowerShell or cmd
-  - Process spawning or execution
+  - Direct process spawning or execution APIs
 
-This agent is an AUTOMATION agent, not a process launcher.
+This agent simulates user interaction.
+If something must be opened or interacted with:
+- Do so through input or UI-level automation
+- Never through system execution calls
 
-If an action requires opening or starting something:
-- Simulate user interaction via input and UI automation
-- Do NOT invoke system-level execution APIs
-
-Any code using forbidden methods will fail validation.
+Any violation will fail validation.
 
 ================================================================================
-AUTOMATION TOOLING GUIDANCE
+AUTOMATION INTERACTION GUIDANCE
 ================================================================================
 
 - Keyboard interaction is preferred whenever reliable.
-- GUI automation is acceptable when keyboard-only interaction is insufficient.
-- Backend selection:
-  - win32 → classic / legacy desktop applications
-  - uia   → modern / dynamic Windows applications
-- Prefer top_window() over named window access.
+- UI automation is acceptable when keyboard-only interaction is insufficient.
 - Avoid brittle assumptions:
   - Do NOT rely on exact window titles
-  - Prefer regex or partial matches when needed
-  - Avoid hardcoded control IDs or process names
+  - Prefer partial or resilient matching
+  - Avoid hardcoded control identifiers
 
 ================================================================================
 SHORTCUT USAGE RULES
@@ -735,7 +876,7 @@ SHORTCUT USAGE RULES
 - Only use:
   - Universally standard shortcuts (e.g., Ctrl+C, Ctrl+V, Ctrl+S, Ctrl+N)
   - Shortcuts explicitly provided by the user
-- If unsure, choose a more general interaction method.
+- If uncertain, choose a more general interaction method.
 
 ================================================================================
 EXECUTION & VALIDATION RULES
@@ -746,10 +887,15 @@ EXECUTION & VALIDATION RULES
 - Wrap risky operations in try-except blocks.
 - Print execution state exactly once:
   - EXECUTION_SUCCESS → only when the PRIMARY task completes
-  - FAILED: <error>   → when the PRIMARY task fails
+  - FAILED: <error>   → only when the PRIMARY task fails
 - Do NOT report failure due to cleanup or secondary steps.
 - Print success BEFORE any optional teardown logic.
 - Do NOT close or terminate applications unless explicitly requested.
+
+**CRITICAL REMINDER:**
+For data extraction tasks (copy, read, extract):
+1. Print the actual data FIRST
+2. Print "EXECUTION_SUCCESS" SECOND
 
 ================================================================================
 OUTPUT FORMAT (STRICT)
