@@ -672,8 +672,18 @@ def create_coordinator_graph():
             task_queue.log_execution(current_task, result)
             
             if result.content:
-                task_outputs[current_task.task_id] = result.content
-            
+                cleaned_content = result.content.replace("EXECUTION_SUCCESS", "").replace("FAILED:", "").strip()
+                # task_outputs[current_task.task_id] = result.content
+                            # Only store if there's actual content
+                if cleaned_content:
+                    task_outputs[current_task.task_id] = cleaned_content
+                    logger.info(f"💾 Stored output for {current_task.task_id}")
+                    logger.info(f"   Length: {len(cleaned_content)} chars")
+                    logger.info(f"   Preview: {cleaned_content[:200]}...")
+                else:
+                    logger.warning(f"⚠️ Task {current_task.task_id} produced empty output after cleaning")
+
+                
             if result.status == "failed":
                 logger.error(f"❌ Task {current_task.task_id} failed: {result.error}")
                 break

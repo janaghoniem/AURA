@@ -410,6 +410,7 @@ async def process_user_input(request: Request):
         user_input = data.get("input", "").strip()
         is_clarification = data.get("is_clarification", False)
         device_type = data.get("device_type", "mobile")
+        user_id = data.get("user_id", "test_user")  # ✅ ADD THIS LINE
         
         if not user_input:
             raise HTTPException(status_code=400, detail="Missing 'input' field")
@@ -424,7 +425,7 @@ async def process_user_input(request: Request):
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"answer": user_input, "input": user_input, "device_type": device_type}
+                payload={"answer": user_input, "input": user_input, "device_type": device_type, "user_id": user_id}
             )
         else:
             message = AgentMessage(
@@ -432,7 +433,7 @@ async def process_user_input(request: Request):
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"input": user_input, "device_type": device_type}
+                payload={"input": user_input, "device_type": device_type,"user_id": user_id}
             )
         
         logger.info(f"⏳ Creating pending response for message ID: {message.message_id}")
@@ -665,6 +666,30 @@ async def thinking_stream(session_id: str):
     
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@app.post("/new-chat")
+async def new_chat_endpoint(request: dict):
+    """Handle new chat creation - clear session state"""
+    try:
+        session_id = request.get("session_id")
+        user_id = request.get("user_id", "test_user")
+        
+        logger.info(f"🔄 New chat requested - clearing session: {session_id}")
+        
+        # Clear language agent conversation for this session
+        from agents.language_agent import active_agents
+        agent_key = f"{user_id}_{session_id}"
+        
+        if agent_key in active_agents:
+            active_agents[agent_key].clear_conversation()
+            logger.info(f"✅ Cleared language agent for {agent_key}")
+        else:
+            logger.info(f"ℹ️ No active agent found for {agent_key}")
+        
+        return {"status": "success", "message": "New chat started", "session_id": session_id}
+        
+    except Exception as e:
+        logger.error(f"❌ New chat error: {e}")
+        return {"status": "error", "message": str(e)}, 500
 
 if __name__ == "__main__":
     import uvicorn
@@ -678,3 +703,4 @@ if __name__ == "__main__":
         port=port,
         log_level="info"
     )
+

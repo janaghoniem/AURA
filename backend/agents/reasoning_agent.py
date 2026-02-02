@@ -66,38 +66,62 @@ Your goal is correctness, clarity, and usefulness to the system."""
         content = task_payload.get("content", "")
         extra_params = task_payload.get("extra_params", {})
         
-        # FIX: Extract input_content if present
+        # ✅ FIX 1: Extract input_content from multiple sources
         if "input_content" in extra_params:
             content = extra_params["input_content"]
-
+            logger.info(f"📥 Using input_content from extra_params ({len(content)} chars)")
+        
+        # ✅ FIX 2: Clean success/failure markers from content
+        if content:
+            content = content.replace("EXECUTION_SUCCESS", "").replace("FAILED:", "").strip()
+            logger.info(f"🧹 Cleaned content: {len(content)} chars")
+        
+        # ✅ FIX 3: Validate content exists
+        if not content or content == "":
+            logger.error("❌ No content to process!")
+            logger.error(f"   ai_prompt: {ai_prompt}")
+            logger.error(f"   extra_params: {json.dumps(extra_params, indent=2)}")
+            return {
+                "task_id": task_payload.get("task_id"),
+                "status": "failed",
+                "error": "No input content provided for reasoning task",
+                "content": ""
+            }
+        
         try:
             logger.info(f"🧠 Reasoning Agent processing task: {ai_prompt[:50]}...")
+            logger.info(f"📊 Content preview: {content[:200]}...")
             
             full_prompt = f"""{self.system_prompt}
 
-TASK: {ai_prompt}
+    TASK: {ai_prompt}
 
-DATA TO PROCESS:
-{content}
+    DATA TO PROCESS:
+    {content}
 
-EXTRA PARAMETERS: {json.dumps(extra_params)}
+    EXTRA PARAMETERS: {json.dumps(extra_params)}
 
-Please respond with valid JSON only."""
+    Please respond with valid JSON only."""
 
             response = await self.llm.ainvoke(full_prompt)
             response_text = response.content if hasattr(response, 'content') else str(response)
-            logger.info("REASONING RESPONSE "+response_text)
+            logger.info(f"🤖 REASONING RESPONSE ({len(response_text)} chars): {response_text[:200]}...")
+            
             # Parse JSON response
             try:
                 parsed_response = json.loads(response_text)
+                result_content = parsed_response.get("result", str(parsed_response))
+                
+                logger.info(f"✅ Reasoning complete: {result_content[:200]}...")
+                
                 return {
                     "task_id": task_payload.get("task_id"),
                     "status": "success",
-                    "content": parsed_response.get("result", str(parsed_response)),
+                    "content": result_content,
                     "metadata": parsed_response.get("metadata", {})
                 }
             except json.JSONDecodeError:
-                # If response isn't valid JSON, wrap it
+                logger.warning("⚠️ Response was not valid JSON, using raw text")
                 return {
                     "task_id": task_payload.get("task_id"),
                     "status": "success",
@@ -106,11 +130,12 @@ Please respond with valid JSON only."""
                 }
 
         except Exception as e:
-            logger.error(f"❌ Reasoning Agent Error: {e}")
+            logger.error(f"❌ Reasoning Agent Error: {e}", exc_info=True)
             return {
                 "task_id": task_payload.get("task_id"),
                 "status": "failed",
-                "error": str(e)
+                "error": str(e),
+                "content": ""
             }
 
 async def start_reasoning_agent():

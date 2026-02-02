@@ -12,7 +12,34 @@ function App() {
   const [orbState, setOrbState] = useState("idle");
   const [userMessage, setUserMessage] = useState("");
   const [assistantMessage, setAssistantMessage] = useState("");
-  const [sessionId] = useState("test-123");
+  // const [sessionId] = useState("test-123");
+  // ✅ USER ID - Generated ONCE per browser, persists forever
+  const [userId] = useState(() => {
+      const stored = localStorage.getItem("userId");
+      if (stored) {
+          console.log("[Auth] Using existing user ID:", stored);
+          return stored;
+      }
+      
+      const newUserId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      localStorage.setItem("userId", newUserId);
+      console.log("[Auth] Created new user ID:", newUserId);
+      return newUserId;
+  });
+
+  // ✅ SESSION ID - Generated ONCE per chat, persists until "New Chat" clicked
+  const [sessionId] = useState(() => {
+      const stored = localStorage.getItem("currentSessionId");
+      if (stored) {
+          console.log("[Session] Using existing session:", stored);
+          return stored;
+      }
+      
+      const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      localStorage.setItem("currentSessionId", newSessionId);
+      console.log("[Session] Created new session:", newSessionId);
+      return newSessionId;
+  });
   const [clarificationResponseToId, setClarificationResponseToId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [chatMode, setChatMode] = useState(false);
@@ -166,15 +193,52 @@ function App() {
     setChatMode(true);
   };
 
-  const handleNewChat = () => {
+  // const handleNewChat = () => {
+  //   console.log("[UI] New chat started");
+  //   setUserMessage("");
+  //   setAssistantMessage("");
+  //   setThinkingSteps([]);
+  //   setIsThinking(false);
+  //   setChatMode(false);
+  // };
+
+  const handleNewChat = async () => {
     console.log("[UI] New chat started");
+    
+    // ✅ Generate NEW session ID (but keep same user ID)
+    const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    localStorage.setItem("currentSessionId", newSessionId);
+    console.log("[Session] New session created:", newSessionId);
+    
+    // Clear UI state
     setUserMessage("");
     setAssistantMessage("");
     setThinkingSteps([]);
     setIsThinking(false);
     setChatMode(false);
-  };
-
+    
+    // ✅ Notify backend to clear OLD session
+    try {
+        const response = await fetch("http://localhost:8000/new-chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                session_id: sessionId,  // OLD session to clear
+                user_id: userId,        // SAME user
+            }),
+        });
+        
+        if (response.ok) {
+            console.log("✅ Backend session cleared");
+            // ✅ RELOAD PAGE to use new session ID
+            window.location.reload();
+        }
+    } catch (error) {
+        console.error("❌ Failed to notify backend:", error);
+        // Even if backend fails, still reload to use new session
+        window.location.reload();
+    }
+};
 
   /* ---------- THINKING STEPS SIMULATION ---------- */
   const startThinkingSequence = async () => {
@@ -323,6 +387,7 @@ function App() {
           body: JSON.stringify({
             audio_data: base64,
             session_id: sessionId,
+            user_id: userId,
           }),
         });
 
@@ -409,10 +474,12 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
+          user_id: userId,
           input: text,
           is_clarification: !!clarificationResponseToId,
           clarification_id: clarificationResponseToId || null,
           device_type: deviceType,
+          user_id:userId,
         }),
       });
 
