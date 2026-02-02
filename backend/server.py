@@ -664,6 +664,30 @@ async def thinking_stream(session_id: str):
     
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+@app.post("/new-chat")
+async def new_chat_endpoint(request: dict):
+    """Handle new chat creation - clear session state"""
+    try:
+        session_id = request.get("session_id")
+        user_id = request.get("user_id", "test_user")
+        
+        logger.info(f"🔄 New chat requested - clearing session: {session_id}")
+        
+        # Clear language agent conversation for this session
+        from agents.language_agent import active_agents
+        agent_key = f"{user_id}_{session_id}"
+        
+        if agent_key in active_agents:
+            active_agents[agent_key].clear_conversation()
+            logger.info(f"✅ Cleared language agent for {agent_key}")
+        else:
+            logger.info(f"ℹ️ No active agent found for {agent_key}")
+        
+        return {"status": "success", "message": "New chat started", "session_id": session_id}
+        
+    except Exception as e:
+        logger.error(f"❌ New chat error: {e}")
+        return {"status": "error", "message": str(e)}, 500
 
 if __name__ == "__main__":
     import uvicorn
@@ -677,3 +701,4 @@ if __name__ == "__main__":
         port=port,
         log_level="info"
     )
+

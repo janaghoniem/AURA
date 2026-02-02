@@ -242,8 +242,18 @@ class LanguageAgent:
         user_text = sanitize_text(user_text)
         self.memory.append({"role": "user", "content": user_text})
         
+        # if len(self.memory) > 21:
+        #     self.memory = [self.memory[0]] + self.memory[-20:]
+
         if len(self.memory) > 21:
-            self.memory = [self.memory[0]] + self.memory[-20:]
+                    # Preserve: system prompt + any injected "Previous Context" message
+                    preserved = [self.memory[0]]
+                    for msg in self.memory[1:]:
+                        if msg.get("role") == "system" and "Previous Context" in msg.get("content", ""):
+                            preserved.append(msg)
+                            break  # only one context message ever exists
+                    preserved.extend(self.memory[-20:])
+                    self.memory = preserved
         
         print("   🤔 Thinking...", end=" ", flush=True)
         response = call_groq_api(self.memory, max_tokens=200)
@@ -323,8 +333,16 @@ async def start_language_agent(broker):
             conversation_history = []
             
             for memory in all_memories:
+                # Skip None entries entirely
+                if memory is None:
+                    continue
+
                 if isinstance(memory, dict):
-                    category = memory.get('metadata', {}).get('category', 'general')
+                    # metadata can exist but be None — handle that explicitly
+                    metadata = memory.get('metadata')
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    category = metadata.get('category', 'general')
                     memory_text = memory.get('memory') or memory.get('text') or str(memory)
                 elif isinstance(memory, str):
                     memory_text = memory
@@ -353,23 +371,22 @@ async def start_language_agent(broker):
             
             print(f"🧠 Retrieved Memory Context:\n{memory_context}\n")
             #here
+            # Always strip stale context first (even if new context is empty)
+            agent.memory = [msg for msg in agent.memory if "Previous Context" not in msg.get("content", "")]
+
             if context_parts:
-                # ✅ FIX: Always update context (don't just check if it exists)
                 memory_msg = {
-                    "role": "system", 
+                    "role": "system",
                     "content": f"Previous Context:\n{memory_context}"
                 }
-                
-                # Remove old context if exists
-                agent.memory = [msg for msg in agent.memory if "Previous Context" not in msg.get("content", "")]
-                
-                # Ensure system prompt is first
                 if agent.memory and agent.memory[0].get("role") == "system":
                     agent.memory.insert(1, memory_msg)
                 else:
                     agent.memory.insert(0, memory_msg)
-                
                 logger.info(f"✅ Injected {len(context_parts)} memory items into conversation")
+            else:
+                logger.info("ℹ️ No memory context available for this session")
+
         except Exception as e:
             logger.error(f"❌ Failed to fetch memory: {e}")
 
@@ -378,6 +395,42 @@ async def start_language_agent(broker):
 
         response, is_complete = agent.user_turn(input_text)
         print(f"🤖 Agent: {response}\n")
+        try:
+            _extraction_prompt = (
+                'You are a personal-info extractor. Read the user message below.\n'
+                'If it contains personal information (name, age, location, job, hobby,\n'
+                'preference, or any fact about the user), extract it.\n'
+                'If it does NOT contain personal info, return exactly: {"personal_info": null}\n\n'
+                f'USER MESSAGE: "{input_text}"\n\n'
+                'Return ONLY valid JSON, no markdown, no explanation:\n'
+                '{"personal_info": "one-sentence summary of what the user revealed, or null"}'
+            )
+            _ext_response = call_groq_api(
+                [{"role": "system", "content": _extraction_prompt}],
+                max_tokens=100
+            )
+            if _ext_response:
+                _clean = _ext_response.strip()
+                if _clean.startswith("```"):
+                    _clean = _clean.split("```")[1]
+                    if _clean.startswith("json"):
+                        _clean = _clean[4:]
+                _extracted = json.loads(_clean.strip())
+                _pi = _extracted.get("personal_info")
+                if _pi and str(_pi).lower() != "null":
+                    from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
+                    _pmgr = get_preference_manager(user_id)
+                    _pmgr.add_preference(
+                        str(_pi),
+                        metadata={
+                            "category": "personal_info",
+                            "source": "language_agent",
+                            "session_id": session_id
+                        }
+                    )
+                    print(f"💾 Stored personal info: {_pi}")
+        except Exception as _ext_err:
+            logger.warning(f"⚠️ Personal info extraction (non-fatal): {_ext_err}")
         
         if is_complete:
             # NEW: Send thinking update
