@@ -23,6 +23,8 @@ function App() {
   const [userName, setUserName] = useState("Labubu");
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const [isThinking, setIsThinking] = useState(false);
+  // True when server-provided SSE thinking stream is connected
+  const [sseConnected, setSseConnected] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -30,7 +32,45 @@ function App() {
   const audioContextRef = useRef(null);
 
   // Speech recognition (wake-word)
-  const { transcript, interimTranscript, finalTranscript, resetTranscript } = useSpeechRecognition();
+  const { transcript, interimTranscript, finalTranscript, resetTranscript, listening, browserSupportsSpeechRecognition } = useSpeechRecognition();
+
+  // Ensure continuous listening starts on mount (if supported)
+  useEffect(() => {
+    if (!browserSupportsSpeechRecognition) {
+      console.warn('[Wake] SpeechRecognition not supported by this browser');
+      return;
+    }
+
+    try {
+      SpeechRecognition.startListening({ continuous: true, language: 'en-US', interimResults: true });
+      console.log('[Wake] Continuous wake-word listening started (mount)');
+
+      // Quick sanity-check: if recognition does not start within 1s, log a hint
+      setTimeout(() => {
+        if (!listening) {
+          console.warn('[Wake] SpeechRecognition did not report listening=true. Browser may not allow continuous recognition in this context.');
+        }
+      }, 1000);
+    } catch (e) {
+      console.warn('[Wake] Failed to start continuous listening on mount:', e);
+    }
+
+    return () => {
+      try { SpeechRecognition.stopListening(); } catch (e) {}
+    };
+  }, [browserSupportsSpeechRecognition]);
+
+  // Detect wake word in interim or final transcripts (word-boundary aware)
+  useEffect(() => {
+    const combined = `${interimTranscript || ''} ${finalTranscript || ''} ${transcript || ''}`.toLowerCase();
+    if (/\baura\b/.test(combined)) {
+      console.log('[Wake] Wake word detected in speech transcript');
+      resetTranscript();
+      if (!isRecording && orbState !== 'processing' && orbState !== 'speaking') {
+        startRecording();
+      }
+    }
+  }, [interimTranscript, finalTranscript, transcript]);
 
   /* ---------- DEVICE DETECTION & RESPONSIVE LAYOUT ---------- */
   useEffect(() => {
@@ -61,10 +101,22 @@ function App() {
   useEffect(() => {
     const eventSource = new EventSource(`http://localhost:8000/thinking-stream/${sessionId}`);
 
+    eventSource.onopen = () => {
+      console.log('[SSE] Connected to thinking stream');
+      setSseConnected(true);
+    };
+
     // Robust SSE handler allowing JSON or plain text steps
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        // Handle explicit clear events from server
+        if (data.action === 'thinking_clear') {
+          setThinkingSteps([]);
+          setIsThinking(false);
+          return;
+        }
+
         if (data.step) {
           setThinkingSteps(prev => [...prev, data.step]);
           setIsThinking(true);
@@ -81,12 +133,16 @@ function App() {
       }
     };
 
-    eventSource.onerror = () => {
-      console.warn("[UI] Thinking stream disconnected");
+    eventSource.onerror = (err) => {
+      console.warn('[SSE] Thinking stream disconnected or errored:', err);
+      setSseConnected(false);
       eventSource.close();
     };
 
-    return () => eventSource.close();
+    return () => {
+      setSseConnected(false);
+      eventSource.close();
+    };
   }, [sessionId]);
 
   /* ---------- HANDLE THINKING UPDATES ---------- */
@@ -122,6 +178,13 @@ function App() {
 
   /* ---------- THINKING STEPS SIMULATION ---------- */
   const startThinkingSequence = async () => {
+    // If server is sending real-time thinking updates, do not simulate locally
+    if (sseConnected) {
+      console.info('[Thinking] Server-side thinking active; skipping local simulation');
+      return;
+    }
+
+    setThinkingSteps([]);
     setIsThinking(true);
     const steps = ["Searching...", "Analyzing...", "Processing...", "Responding..."];
     
@@ -338,8 +401,8 @@ function App() {
 
       console.log("[Agent] Clarification mode:", !!clarificationResponseToId);
 
-      // Start thinking sequence
-      await startThinkingSequence();
+      // Start thinking sequence (local simulation only when SSE not available)
+      if (!sseConnected) await startThinkingSequence();
 
       const res = await fetch("http://localhost:8000/process", {
         method: "POST",

@@ -572,11 +572,21 @@ def create_coordinator_graph():
             conversation_history=state.get("conversation_history", [])
         )
         
-        tasks = plan_result.get("tasks", [])
+        # Surface decomposition errors when present
+        if isinstance(plan_result, dict) and "error" in plan_result:
+            logger.error(f"❌ Decomposition returned error: {plan_result['error']}")
+            tasks = []
+        else:
+            tasks = plan_result.get("tasks", [])
+            try:
+                tasks_dump = [t.model_dump() if hasattr(t, 'model_dump') else t for t in tasks]
+                logger.info(f"📋 Decomposition result ({len(tasks_dump)} tasks): {json.dumps(tasks_dump, indent=2)}")
+            except Exception as e:
+                logger.info(f"📋 Decomposed into {len(tasks)} tasks (failed to serialize tasks: {e})")
         
         # Set device in all tasks if not already set
         for task in tasks:
-            if task.device is None:
+            if getattr(task, "device", None) is None:
                 task.device = device_type
         
         return {
@@ -692,7 +702,8 @@ def create_coordinator_graph():
                 state["conversation_history"] = []
             
             state["conversation_history"].append({
-                "user_message": state['input'].get('action', ''),
+                # Prefer the 'confirmation' payload from the Language Agent; fall back to 'action' for compatibility
+                "user_message": state['input'].get('confirmation', state['input'].get('action', '')),
                 "action_taken": f"Executed {success_count} tasks",
                 "result": "success" if success_count == total_count else "partial",
                 "timestamp": datetime.now().isoformat()
@@ -734,7 +745,8 @@ def create_coordinator_graph():
                 pref_mgr = get_preference_manager(user_id)
                 
                 task_summary = {
-                    "original_request": state['input'].get('action', ''),
+                    # Prefer confirmation from Language Agent for a faithful representation of the user's intent
+                    "original_request": state['input'].get('confirmation', state['input'].get('action', '')),
                     "completed_steps": [t.ai_prompt for t in state['tasks']],
                     "total_steps": total_count
                 }
@@ -933,7 +945,13 @@ async def start_coordinator_agent(broker_instance):
     
     async def handle_task_from_language(message: AgentMessage):
         """Handle task from Language Agent"""
-        logger.info(f"📨 Coordinator received: {message.payload.get('action', 'Unknown')}")
+        # Log a helpful summary of the incoming payload: prefer the confirmation text if present
+        payload_summary = message.payload.get('confirmation') or message.payload.get('action') or str(message.payload)
+        try:
+            payload_json = json.dumps(message.payload, default=str)
+        except Exception:
+            payload_json = str(message.payload)
+        logger.info(f"📨 Coordinator received confirmation: {payload_summary} | full_payload: {payload_json}")
 
         http_request_id = message.response_to if message.response_to else message.message_id
         user_id = message.payload.get("user_id", "default_user")

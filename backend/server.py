@@ -641,8 +641,9 @@ async def thinking_stream(session_id: str):
         
         async def handle_thinking_update(message):
             if hasattr(message, 'session_id') and message.session_id == session_id:
-                if hasattr(message, 'payload') and message.payload.get("action") == "thinking_update":
-                    await thinking_queue.put(message.payload.get("step"))
+                if hasattr(message, 'payload'):
+                    # Forward the entire payload so clients can react to different actions
+                    await thinking_queue.put(message.payload)
         
         # Subscribe to broadcast channel
         broker.subscribe(Channels.BROADCAST, handle_thinking_update)
@@ -651,9 +652,9 @@ async def thinking_stream(session_id: str):
             while True:
                 try:
                     # Wait for thinking updates with timeout
-                    step = await asyncio.wait_for(thinking_queue.get(), timeout=30)
-                    # Send JSON-formatted data so clients can parse safely
-                    yield f"data: {json.dumps({ 'step': step })}\n\n"
+                    payload = await asyncio.wait_for(thinking_queue.get(), timeout=30)
+                    # Send full payload as JSON so clients can handle update/clear events
+                    yield f"data: {json.dumps(payload)}\n\n"
                 except asyncio.TimeoutError:
                     # Keep connection alive with heartbeat
                     yield ": heartbeat\n\n"
