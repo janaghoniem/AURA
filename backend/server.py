@@ -410,6 +410,7 @@ async def process_user_input(request: Request):
         user_input = data.get("input", "").strip()
         is_clarification = data.get("is_clarification", False)
         device_type = data.get("device_type", "mobile")
+        user_id = data.get("user_id", "test_user")  # ✅ ADD THIS LINE
         
         if not user_input:
             raise HTTPException(status_code=400, detail="Missing 'input' field")
@@ -424,7 +425,7 @@ async def process_user_input(request: Request):
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"answer": user_input, "input": user_input, "device_type": device_type}
+                payload={"answer": user_input, "input": user_input, "device_type": device_type, "user_id": user_id}
             )
         else:
             message = AgentMessage(
@@ -432,7 +433,7 @@ async def process_user_input(request: Request):
                 sender=AgentType.LANGUAGE,
                 receiver=AgentType.LANGUAGE,
                 session_id=session_id,
-                payload={"input": user_input, "device_type": device_type}
+                payload={"input": user_input, "device_type": device_type,"user_id": user_id}
             )
         
         logger.info(f"⏳ Creating pending response for message ID: {message.message_id}")
