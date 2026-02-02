@@ -212,35 +212,44 @@ async def clear_user_preferences(user_id: str):
 
 @router.get("/stats")
 async def get_memory_stats(user_id: str):
-    """Get preference statistics (no conversation history)"""
+    """Get preference statistics with REAL MongoDB storage calculation"""
     try:
         logger.info(f"📊 Fetching memory stats for user: {user_id}")
         
         client = MongoClient(MONGODB_URI)
         db = client["yusr_db"]
-        
-        # Count preferences by category
         preferences = db["mem0_preferences"]
         
-        total_prefs = preferences.count_documents({"user_id": user_id})
-        personal_info = preferences.count_documents({
-            "user_id": user_id,
-            "metadata.category": "personal_info"
-        })
-        app_usage = preferences.count_documents({
-            "user_id": user_id,
-            "metadata.category": "app_usage"
-        })
+        # ✅ Use direct MongoDB query (Mem0's get_all() is broken)
+        user_docs = list(preferences.find({"user_id": user_id}))
+        total_prefs = len(user_docs)
         
-        # Estimate storage size
-        user_prefs = list(preferences.find({"user_id": user_id}))
-        storage_size_mb = (len(str(user_prefs)) / (1024 * 1024))
+        # Calculate storage size from actual documents
+        storage_bytes = 0
+        personal_info = 0
+        app_usage = 0
+        
+        for doc in user_docs:
+            # Calculate BSON size (approximate)
+            import json
+            doc_json = json.dumps(doc, default=str)
+            storage_bytes += len(doc_json.encode('utf-8'))
+            
+            # Count by category
+            category = doc.get('metadata', {}).get('category', 'general')
+            if category == 'personal_info':
+                personal_info += 1
+            elif category == 'app_usage':
+                app_usage += 1
+        
+        storage_size_mb = storage_bytes / (1024 * 1024)
         
         stats = {
             "total_preferences": total_prefs,
             "personal_info_count": personal_info,
             "app_preferences_count": app_usage,
             "storage_size_mb": round(storage_size_mb, 2),
+            "storage_bytes": storage_bytes,  # ✅ NEW: Raw bytes for frontend
             "status": "success"
         }
         
@@ -250,7 +259,7 @@ async def get_memory_stats(user_id: str):
     except Exception as e:
         logger.error(f"❌ Failed to get stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @router.get("/health")
 async def health_check():
     """Health check endpoint"""

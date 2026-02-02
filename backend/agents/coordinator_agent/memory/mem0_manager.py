@@ -245,17 +245,20 @@ class Mem0PreferenceManager:
                 f"(threshold: {min_score}) for query: {query[:50]}..."
             )
             # Fallback: if vector search returned nothing, use get_all()
-            if len(relevant_memories) == 0:
-                logger.warning("⚠️ Vector search returned 0, falling back to get_all()")
-                try:
-                    all_stored = self.get_all_preferences()
-                    if all_stored:
-                        logger.info(f"✅ Fallback found {len(all_stored)} preferences")
-                        relevant_memories = all_stored[:limit]
-                except Exception as fb_err:
-                    logger.error(f"❌ Fallback failed: {fb_err}")
+
+            # ✅ FIX: Ensure we always return a list, never None
+            if relevant_memories is None:
+                logger.warning("⚠️ relevant_memories is None, returning empty list")
+                return []
+            
+            # ✅ FIX: Filter out any None entries before returning
+            relevant_memories = [m for m in relevant_memories if m is not None]
+            
+            logger.info(f"✅ Returning {len(relevant_memories)} valid memories (all non-None)")
+            return relevant_memories
+        
         except Exception as e:
-            logger.error(f"❌ Failed to retrieve preferences: {e}")
+            logger.error(f"❌ Failed to retrieve preferences: {e}", exc_info=True)
             return []
 
     def get_conversation_history(self, limit: int = 5) -> List:

@@ -333,9 +333,16 @@ async def start_language_agent(broker):
             conversation_history = []
             
             for memory in all_memories:
-                # Skip None entries entirely
-                if memory is None:
-                    continue
+                # NEW CODE (USE THIS):
+                # ✅ FIX: Add explicit None/empty check BEFORE iteration
+                if not all_memories or all_memories is None:
+                    logger.warning(f"⚠️ No memories found for user {user_id}")
+                    all_memories = []
+
+                # ✅ FIX: Ensure it's a list before iterating
+                if not isinstance(all_memories, list):
+                    logger.error(f"❌ get_relevant_preferences returned {type(all_memories)}, expected list")
+                    all_memories = []
 
                 if isinstance(memory, dict):
                     # metadata can exist but be None — handle that explicitly
