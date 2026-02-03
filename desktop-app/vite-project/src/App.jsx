@@ -479,7 +479,6 @@ function App() {
           is_clarification: !!clarificationResponseToId,
           clarification_id: clarificationResponseToId || null,
           device_type: deviceType,
-          user_id:userId,
         }),
       });
 
