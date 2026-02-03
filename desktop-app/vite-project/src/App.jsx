@@ -46,6 +46,7 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [deviceType, setDeviceType] = useState("desktop");
+  const [ttsVoice, setTtsVoice] = useState(() => localStorage.getItem("ttsVoice") || "Gacrux");
   const [screenSize, setScreenSize] = useState("desktop");
   const [userName, setUserName] = useState("Labubu");
   const [thinkingSteps, setThinkingSteps] = useState([]);
@@ -438,6 +439,12 @@ function App() {
     console.log("[Settings] Saving profile:", profileData);
     localStorage.setItem("userName", profileData.username);
     setUserName(profileData.username);
+
+    // Persist TTS voice if provided
+    if (profileData.voice) {
+      localStorage.setItem("ttsVoice", profileData.voice);
+      setTtsVoice(profileData.voice);
+    }
   };
 
   /* ---------- TEXT → AGENT ---------- */
@@ -543,7 +550,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text,
-          voice_name: "Gacrux",
+          voice_name: ttsVoice,
         }),
       });
 
@@ -559,7 +566,8 @@ function App() {
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-      const audioBlob = new Blob([bytes], { type: "audio/wav" });
+      // Server returns MP3 now
+      const audioBlob = new Blob([bytes], { type: "audio/mpeg" });
 
       const url = URL.createObjectURL(audioBlob);
       console.log("[TTS] Audio blob created, URL:", url);
@@ -646,6 +654,7 @@ function App() {
           onClose={() => setShowSettings(false)} 
           onSave={handleSettingsSave}
           initialName={userName}
+          initialVoice={ttsVoice}
         />
       )}
     </div>

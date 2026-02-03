@@ -23,8 +23,7 @@ import android.content.pm.PackageManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.util.Base64
-import android.speech.tts.TextToSpeech
-import java.util.Locale
+
 
 /**
  * FIXED MainActivity
@@ -36,7 +35,7 @@ import java.util.Locale
  * 4. ✅ Validates UI tree before sending to backend
  * 5. ✅ FIXED: sendTextToBackend now actually sends to backend via sendTextToCoordinator
  */
-class MainActivity: FlutterActivity(), TextToSpeech.OnInitListener {
+class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.automation/service"
     private val TAG = "AutomationApp"
     private val BACKEND_URL = "http://10.0.2.2:8000"
@@ -50,28 +49,9 @@ class MainActivity: FlutterActivity(), TextToSpeech.OnInitListener {
     private val PERMISSION_REQUEST_CODE = 200
     private val MIN_RECORDING_DURATION_MS = 1000
     
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+
     
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            Log.d(TAG, "🔊 TextToSpeech initialized successfully")
-            tts?.language = Locale.getDefault()
-            ttsReady = true
-        } else {
-            Log.e(TAG, "❌ TextToSpeech initialization failed")
-            ttsReady = false
-        }
-    }
-    
-    override fun onDestroy() {
-        if (tts != null) {
-            tts?.stop()
-            tts?.shutdown()
-            Log.d(TAG, "🔊 TextToSpeech shutdown")
-        }
-        super.onDestroy()
-    }
+
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -269,6 +249,12 @@ class MainActivity: FlutterActivity(), TextToSpeech.OnInitListener {
                     
                     Log.d(TAG, "💬 Extracted message: '$message'")
                     
+                    try {
+                        speakText(message)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error while initiating TTS: ${e.message}", e)
+                    }
+                    
                     return mapOf(
                         "status" to "success",
                         "response" to response,
@@ -446,14 +432,72 @@ class MainActivity: FlutterActivity(), TextToSpeech.OnInitListener {
     }
     
     private fun speakText(text: String) {
-        if (!ttsReady || text.isEmpty()) return
-        
-        Log.d(TAG, "🔊 Speaking: '$text'")
-        
-        try {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ TTS error: ${e.message}")
+        if (text.isEmpty()) return
+
+        Log.d(TAG, "🔊 speakText - requesting TTS from backend")
+
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val url = URL("$BACKEND_URL/text-to-speech")
+                val connection = url.openConnection() as HttpURLConnection
+                try {
+                    connection.requestMethod = "POST"
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.connectTimeout = NETWORK_TIMEOUT
+                    connection.readTimeout = NETWORK_TIMEOUT
+
+                    val requestPayload = JSONObject().apply {
+                        put("text", text)
+                        put("session_id", SESSION_ID)
+                    }
+
+                    connection.doOutput = true
+                    connection.outputStream.use { os ->
+                        val payload = requestPayload.toString().toByteArray(Charsets.UTF_8)
+                        os.write(payload)
+                        os.flush()
+                    }
+
+                    val responseCode = connection.responseCode
+                    Log.d(TAG, "📥 TTS response code: $responseCode")
+
+                    if (responseCode == HttpURLConnection.HTTP_OK) {
+                        val response = connection.inputStream.bufferedReader().use { it.readText() }
+                        val responseJson = JSONObject(response)
+                        val audioBase64 = responseJson.optString("audio_base64", "")
+                        if (audioBase64.isNotEmpty()) {
+                            val audioBytes = Base64.getDecoder().decode(audioBase64)
+                            val audioFile = File(cacheDir, "tts_${System.currentTimeMillis()}.mp3")
+                            audioFile.writeBytes(audioBytes)
+                            Log.d(TAG, "✅ TTS audio written to ${audioFile.absolutePath}")
+
+                            runOnUiThread {
+                                try {
+                                    val mediaPlayer = MediaPlayer()
+                                    mediaPlayer.setDataSource(audioFile.absolutePath)
+                                    mediaPlayer.setOnCompletionListener {
+                                        it.release()
+                                        audioFile.delete()
+                                    }
+                                    mediaPlayer.prepare()
+                                    mediaPlayer.start()
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "❌ MediaPlayer error: ${e.message}", e)
+                                }
+                            }
+                        } else {
+                            Log.e(TAG, "❌ TTS response missing audio")
+                        }
+                    } else {
+                        val err = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
+                        Log.e(TAG, "❌ TTS HTTP $responseCode: $err")
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ speakText exception: ${e.message}", e)
+            }
         }
     }
 

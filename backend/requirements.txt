@@ -30,6 +30,10 @@ google-auth>=2.23.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
 
+# Google Cloud Speech & Text-to-Speech
+google-cloud-speech>=2.20.0
+google-cloud-texttospeech>=2.14.0
+
 # Memory & Database integrations
 langgraph-checkpoint-sqlite>=2.0.0
 langgraph-checkpoint-mongodb>=0.3.0

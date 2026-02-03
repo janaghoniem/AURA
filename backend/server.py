@@ -11,7 +11,9 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from groq import Groq
+# Use Google Cloud Speech-to-Text and Text-to-Speech
+from google.cloud import speech
+from google.cloud import texttospeech
 
 # Import broker and agents
 from agents.utils.broker import broker
@@ -34,11 +36,11 @@ load_dotenv()
 
 # Debug: Check which .env file was loaded and what keys are set
 logger_debug = logging.getLogger("server_init")
-groq_key = os.getenv("GROQ_API_KEY")
-if groq_key:
-    logger_debug.info(f"🔑 GROQ_API_KEY loaded: {groq_key[:20]}...{groq_key[-10:]}")
+google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if google_creds:
+    logger_debug.info(f"🔑 GOOGLE_APPLICATION_CREDENTIALS loaded: {google_creds}")
 else:
-    logger_debug.error("❌ GROQ_API_KEY NOT found in environment!")
+    logger_debug.warning("❌ GOOGLE_APPLICATION_CREDENTIALS NOT found in environment! Set path to service account JSON in this variable.")
 
 # Configure logging
 logging.basicConfig(
@@ -50,15 +52,19 @@ logger = logging.getLogger(__name__)
 # Store pending responses (for HTTP API)
 pending_responses = {}
 
-# Initialize Groq Client for TTS and STT
-# PUT YOUR GROQ API KEY IN YOUR .env FILE AS: GROQ_API_KEY=your_key_here
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    logger.warning("⚠️ GROQ_API_KEY not set - speech services will not work")
-    groq_client = None
-else:
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    logger.info("✅ Groq client initialized for TTS and STT")
+# Initialize Google Cloud Speech and Text-to-Speech clients
+GOOGLE_CREDS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+if not GOOGLE_CREDS:
+    logger.warning("⚠️ GOOGLE_APPLICATION_CREDENTIALS not set - Google Cloud speech services may not work")
+
+try:
+    speech_client = speech.SpeechClient()
+    tts_client = texttospeech.TextToSpeechClient()
+    logger.info("✅ Google Cloud Speech and TTS clients initialized")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize Google Cloud clients: {e}")
+    speech_client = None
+    tts_client = None
 
 
 @asynccontextmanager
@@ -169,87 +175,92 @@ def detect_language(text: str) -> str:
 @app.post("/text-to-speech")
 async def text_to_speech(request: Request):
     """
-    Convert text to speech using Groq TTS with intelligent language detection
-    FIX: Updated model name and voice mapping
+    Convert text to speech using Google Cloud Text-to-Speech.
+    Supports language auto-detection and voice/dialect selection via `voice_name` or `language`.
+    Returns MP3 audio in base64.
     """
     try:
         logger.info("🔊 Received TTS request")
-        
-        if not groq_client:
-            logger.error("❌ Groq client not initialized")
-            raise HTTPException(status_code=500, detail="TTS service not available - GROQ_API_KEY not set")
-        
+
+        if not tts_client:
+            logger.error("❌ Google TTS client not initialized")
+            raise HTTPException(status_code=500, detail="TTS service not available")
+
         data = await request.json()
         text = data.get("text", "").strip()
         voice_name = data.get("voice_name")
         force_voice = data.get("force_voice", False)
-        
+        requested_language = data.get("language")
+
         if not text:
             logger.error("❌ No text provided for TTS")
             raise HTTPException(status_code=400, detail="Missing 'text' field")
-        
-        # Auto-detect language if voice not specified or not forcing
-        if not voice_name or not force_voice:
-            detected_lang = detect_language(text)
-            logger.info(f"🔍 Detected language: {detected_lang}")
-            
-            if not force_voice:
-                if detected_lang == 'arabic':
-                    voice_name = 'orpheus-arabic'
-                    logger.info("🎤 Auto-selected Arabic voice")
-                elif detected_lang == 'mixed':
-                    arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
-                    total_alpha = len(re.findall(r'[\u0600-\u06FFa-zA-Z]', text))
-                    if total_alpha > 0 and arabic_chars / total_alpha > 0.3:
-                        voice_name = 'orpheus-arabic'
-                        logger.info("🎤 Auto-selected Arabic voice for mixed text")
-                    else:
-                        voice_name = 'orpheus-english'
-                        logger.info("🎤 Auto-selected English voice for mixed text")
-                else:
-                    voice_name = 'orpheus-english'
-                    logger.info("🎤 Auto-selected English voice")
-        
-        if not voice_name:
-            voice_name = 'orpheus-english'
-        
-        # FIX: Updated voice mapping with correct model names
+
+        detected_lang = detect_language(text)
+        logger.info(f"🔍 Detected language: {detected_lang}")
+
+        # Language/dialect resolution
+        # If client provided explicit language/dialect, prefer it (example: 'ar-EG' or 'ar-SA')
+        language_code = None
+        if requested_language:
+            # Normalize common short forms
+            if requested_language.lower().startswith('ar'):
+                # Map variants to Google-style codes
+                language_code = requested_language if '-' in requested_language else f"{requested_language}-SA"
+            elif requested_language.lower().startswith('en'):
+                language_code = requested_language if '-' in requested_language else "en-US"
+        else:
+            language_map = {"arabic": "ar-SA", "english": "en-US", "mixed": "en-US"}
+            language_code = language_map.get(detected_lang, "en-US")
+
+        # Voice mapping - friendly names -> Google voices (common Wavenet)
         voice_mapping = {
-            "orpheus-english": "canopylabs/orpheus-tts-v1-english",
-            "orpheus-arabic": "canopylabs/orpheus-tts-v1-arabic-saudi",
-            "arabic": "canopylabs/orpheus-tts-v1-arabic-saudi",
-            "english": "canopylabs/orpheus-tts-v1-english",
-            "Gacrux": "canopylabs/orpheus-tts-v1-english"  # Legacy fallback
+            "Gacrux": "en-US-Wavenet-D",
+            "default_en": "en-US-Wavenet-F",
+            "default_ar": "ar-XA-Wavenet-A",
+            "orpheus-english": "en-US-Wavenet-F",
+            "orpheus-arabic": "ar-XA-Wavenet-A",
         }
-        
-        groq_model = voice_mapping.get(voice_name, "canopylabs/orpheus-tts-v1-english")
-        
-        logger.info(f"🗣️ Generating speech for text: '{text[:50]}...'")
-        logger.info(f"🎤 Using model: {groq_model}")
-        
-        # FIX: Generate TTS using correct model format
-        response = groq_client.audio.speech.create(
-            model=groq_model,  # Use full model name
-            input=text
+
+        if not voice_name or not force_voice:
+            if detected_lang == 'arabic':
+                voice_name = 'orpheus-arabic'
+            else:
+                voice_name = voice_name or 'Gacrux'
+
+        google_voice = voice_mapping.get(voice_name, voice_mapping['Gacrux'])
+
+        synthesis_input = texttospeech.SynthesisInput(text=text)
+
+        voice_params = texttospeech.VoiceSelectionParams(
+            language_code=language_code,
+            name=google_voice,
+            ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
         )
-        
-        # Read the audio content
-        audio_content = response.read()
-        logger.info(f"✅ TTS generated: {len(audio_content)} bytes of audio data")
-        
-        # Convert to base64
+
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+
+        response = tts_client.synthesize_speech(
+            input=synthesis_input,
+            voice=voice_params,
+            audio_config=audio_config,
+        )
+
+        audio_content = response.audio_content
         base64_audio = base64.b64encode(audio_content).decode('utf-8')
-        logger.info(f"✅ Audio encoded: {len(base64_audio)} base64 characters")
-        
+
         return {
             "status": "success",
             "audio_data": base64_audio,
-            "format": "wav",
+            "format": "mp3",
             "sample_rate": 24000,
-            "voice_used": groq_model,
-            "detected_language": detect_language(text)
+            "voice_used": google_voice,
+            "detected_language": detected_lang,
+            "language_code": language_code,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -259,81 +270,69 @@ async def text_to_speech(request: Request):
 @app.post("/transcribe")
 async def transcribe_audio(request: Request):
     """
-    Transcribe audio using Groq Whisper API with multilingual support (Arabic + English)
-    Automatically deletes audio after processing
-    
-    NOTE: This is STT (Speech-to-Text). For TTS (Text-to-Speech) in Arabic, 
-    use the /text-to-speech endpoint with voice_name="orpheus-arabic"
+    Transcribe audio using Google Cloud Speech-to-Text.
+    Accepts base64-encoded audio bytes and optional `language` or `language_hints` to favor dialects.
     """
     try:
         logger.info("🎤 Received audio transcription request")
 
-        if not groq_client:
-            logger.error("❌ Groq client not initialized")
+        if not speech_client:
+            logger.error("❌ Google Speech client not initialized")
             raise HTTPException(status_code=500, detail="Transcription service not available")
 
         data = await request.json()
         audio_data = data.get("audio_data", "")
         session_id = data.get("session_id", "default")
-        model = data.get("model", "whisper-large-v3")
+        requested_language = data.get("language")  # e.g., 'ar-SA' or 'ar-EG' or 'en-US'
+        language_hints = data.get("language_hints", [])  # list of languages to assist
 
         if not audio_data:
             raise HTTPException(status_code=400, detail="Missing 'audio_data'")
 
-        # Decode base64 audio
         audio_bytes = base64.b64decode(audio_data)
 
-        # Detect format extension
-        file_extension = ".m4a" 
-        if audio_bytes[:4] == b'RIFF': file_extension = ".wav"
-        elif audio_bytes[:3] == b'ID3': file_extension = ".mp3"
+        # Try to detect common encodings
+        if audio_bytes[:4] == b'RIFF':
+            encoding = speech.RecognitionConfig.AudioEncoding.LINEAR16
+        elif audio_bytes[:3] == b'ID3' or audio_bytes[:2] == b'\xff\xfb':
+            encoding = speech.RecognitionConfig.AudioEncoding.MP3
+        elif audio_bytes[:4] == b"\x1A\x45\xDF\xA3":
+            encoding = speech.RecognitionConfig.AudioEncoding.WEBM_OPUS
+        else:
+            encoding = speech.RecognitionConfig.AudioEncoding.ENCODING_UNSPECIFIED
 
-        # Use tempfile to create a temporary file that we will delete manually
-        with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as temp_audio:
-            temp_audio.write(audio_bytes)
-            temp_path = temp_audio.name
+        # Determine language code: prefer explicit request, otherwise default to Arabic+English hints
+        if requested_language:
+            language_code = requested_language
+        else:
+            language_code = "en-US"
 
-        try:
-            # Multilingual prompt for Arabic + English transcription
-            # Whisper uses the prompt as context/guidance for transcription style
-            bilingual_prompt = (
-                "Transcribe exactly as spoken. "
-                "Keep Arabic and English words mixed as-is. "
-                "Do not translate between languages. "
-                "افتح calculator, open التطبيق"
-            )
-            
-            # Transcribe using Groq Whisper with multilingual support
-            with open(temp_path, "rb") as audio_file:
-                transcription = groq_client.audio.transcriptions.create(
-                    file=(f"audio{file_extension}", audio_file),
-                    model=model,
-                    prompt=bilingual_prompt,  # Guide Whisper to preserve multilingual content
-                    response_format="text",
-                    language="ar",  # Set to Arabic to better detect mixed content
-                    temperature=0.0 
-                )
+        # If no hints provided, offer both Arabic and English to allow mixed recognition
+        if not language_hints:
+            language_hints = ["ar-SA", "en-US"]
 
-            transcript = transcription.strip()
-            
-            # Check for empty or silent audio
-            if not transcript or len(transcript) < 2:
-                logger.warning("⚠️ Empty or silent audio detected")
-                transcript = "Couldn't catch that. Please try again."
-            
-            logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
+        config = speech.RecognitionConfig(
+            encoding=encoding,
+            sample_rate_hertz=16000,
+            language_code=language_code,
+            alternative_language_codes=language_hints,
+            enable_automatic_punctuation=True,
+        )
 
-            return {
-                "status": "success",
-                "transcript": transcript,
-                "session_id": session_id
-            }
+        audio = speech.RecognitionAudio(content=audio_bytes)
 
-        finally:
-            # Ensure the file is deleted immediately after the API call
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
-                logger.info(f"🗑️ Deleted temporary file: {temp_path}")
+        # Use sync recognition for small audio; client can switch to long-running for longer recordings
+        response = speech_client.recognize(config=config, audio=audio)
+
+        transcript = " ".join([r.alternatives[0].transcript for r in response.results]) if response.results else ""
+
+        if not transcript or len(transcript) < 2:
+            logger.warning("⚠️ Empty or silent audio detected")
+            transcript = "Couldn't catch that. Please try again."
+
+        logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
+
+        return {"status": "success", "transcript": transcript, "session_id": session_id}
 
     except Exception as e:
         logger.error(f"❌ Transcription error: {e}", exc_info=True)
@@ -602,8 +601,8 @@ async def health_check():
         "service": "YUSR Unified Backend (Pub/Sub)",
         "version": "3.0.0",
         "broker": "running" if broker.running else "stopped",
-        "transcription": "available (Groq Whisper)" if groq_client else "unavailable",
-        "tts": "available (Groq Orpheus)" if groq_client else "unavailable"
+        "transcription": "available (Google Speech-to-Text)" if speech_client else "unavailable",
+        "tts": "available (Google Text-to-Speech)" if tts_client else "unavailable"
     }
 
 

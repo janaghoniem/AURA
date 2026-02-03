@@ -2,13 +2,14 @@
 import React, { useState, useEffect } from "react";
 import { X, User, Brain, Trash2, RefreshCw, Eye, EyeOff } from "lucide-react";
 
-const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
+const SettingsModal = ({ onClose, onSave, initialName = "User", initialVoice = "Gacrux" }) => {
   const [activeSection, setActiveSection] = useState("profile");
   const [profileData, setProfileData] = useState({
     username: initialName,
     email: "user@example.com",
     theme: "dark",
     language: "en",
+    voice: initialVoice,
   });
   
   // ✅ Long-term memory (preferences) stats
@@ -222,6 +223,19 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
                       <option value="en">English</option>
                       <option value="ar">العربية</option>
                       <option value="es">Español</option>
+                    </select>
+                  </label>
+
+                  <label className="settings-label">
+                    TTS Voice
+                    <select
+                      className="settings-select"
+                      value={profileData.voice}
+                      onChange={(e) => handleProfileChange("voice", e.target.value)}
+                    >
+                      <option value="Gacrux">Gacrux (default)</option>
+                      <option value="orpheus-english">Orpheus English</option>
+                      <option value="orpheus-arabic">Orpheus Arabic</option>
                     </select>
                   </label>
                 </div>
