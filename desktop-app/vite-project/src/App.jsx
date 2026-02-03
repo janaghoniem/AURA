@@ -12,7 +12,34 @@ function App() {
   const [orbState, setOrbState] = useState("idle");
   const [userMessage, setUserMessage] = useState("");
   const [assistantMessage, setAssistantMessage] = useState("");
-  const [sessionId] = useState("test-123");
+  // const [sessionId] = useState("test-123");
+  // ✅ USER ID - Generated ONCE per browser, persists forever
+  const [userId] = useState(() => {
+      const stored = localStorage.getItem("userId");
+      if (stored) {
+          console.log("[Auth] Using existing user ID:", stored);
+          return stored;
+      }
+      
+      const newUserId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      localStorage.setItem("userId", newUserId);
+      console.log("[Auth] Created new user ID:", newUserId);
+      return newUserId;
+  });
+
+  // ✅ SESSION ID - Generated ONCE per chat, persists until "New Chat" clicked
+  const [sessionId] = useState(() => {
+      const stored = localStorage.getItem("currentSessionId");
+      if (stored) {
+          console.log("[Session] Using existing session:", stored);
+          return stored;
+      }
+      
+      const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      localStorage.setItem("currentSessionId", newSessionId);
+      console.log("[Session] Created new session:", newSessionId);
+      return newSessionId;
+  });
   const [clarificationResponseToId, setClarificationResponseToId] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [chatMode, setChatMode] = useState(false);
@@ -23,6 +50,8 @@ function App() {
   const [userName, setUserName] = useState("Labubu");
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const [isThinking, setIsThinking] = useState(false);
+  // True when server-provided SSE thinking stream is connected
+  const [sseConnected, setSseConnected] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -30,7 +59,45 @@ function App() {
   const audioContextRef = useRef(null);
 
   // Speech recognition (wake-word)
-  const { transcript, interimTranscript, finalTranscript, resetTranscript } = useSpeechRecognition();
+  const { transcript, interimTranscript, finalTranscript, resetTranscript, listening, browserSupportsSpeechRecognition } = useSpeechRecognition();
+
+  // Ensure continuous listening starts on mount (if supported)
+  useEffect(() => {
+    if (!browserSupportsSpeechRecognition) {
+      console.warn('[Wake] SpeechRecognition not supported by this browser');
+      return;
+    }
+
+    try {
+      SpeechRecognition.startListening({ continuous: true, language: 'en-US', interimResults: true });
+      console.log('[Wake] Continuous wake-word listening started (mount)');
+
+      // Quick sanity-check: if recognition does not start within 1s, log a hint
+      setTimeout(() => {
+        if (!listening) {
+          console.warn('[Wake] SpeechRecognition did not report listening=true. Browser may not allow continuous recognition in this context.');
+        }
+      }, 1000);
+    } catch (e) {
+      console.warn('[Wake] Failed to start continuous listening on mount:', e);
+    }
+
+    return () => {
+      try { SpeechRecognition.stopListening(); } catch (e) {}
+    };
+  }, [browserSupportsSpeechRecognition]);
+
+  // Detect wake word in interim or final transcripts (word-boundary aware)
+  useEffect(() => {
+    const combined = `${interimTranscript || ''} ${finalTranscript || ''} ${transcript || ''}`.toLowerCase();
+    if (/\baura\b/.test(combined)) {
+      console.log('[Wake] Wake word detected in speech transcript');
+      resetTranscript();
+      if (!isRecording && orbState !== 'processing' && orbState !== 'speaking') {
+        startRecording();
+      }
+    }
+  }, [interimTranscript, finalTranscript, transcript]);
 
   /* ---------- DEVICE DETECTION & RESPONSIVE LAYOUT ---------- */
   useEffect(() => {
@@ -61,10 +128,22 @@ function App() {
   useEffect(() => {
     const eventSource = new EventSource(`http://localhost:8000/thinking-stream/${sessionId}`);
 
+    eventSource.onopen = () => {
+      console.log('[SSE] Connected to thinking stream');
+      setSseConnected(true);
+    };
+
     // Robust SSE handler allowing JSON or plain text steps
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        // Handle explicit clear events from server
+        if (data.action === 'thinking_clear') {
+          setThinkingSteps([]);
+          setIsThinking(false);
+          return;
+        }
+
         if (data.step) {
           setThinkingSteps(prev => [...prev, data.step]);
           setIsThinking(true);
@@ -81,12 +160,16 @@ function App() {
       }
     };
 
-    eventSource.onerror = () => {
-      console.warn("[UI] Thinking stream disconnected");
+    eventSource.onerror = (err) => {
+      console.warn('[SSE] Thinking stream disconnected or errored:', err);
+      setSseConnected(false);
       eventSource.close();
     };
 
-    return () => eventSource.close();
+    return () => {
+      setSseConnected(false);
+      eventSource.close();
+    };
   }, [sessionId]);
 
   /* ---------- HANDLE THINKING UPDATES ---------- */
@@ -110,18 +193,62 @@ function App() {
     setChatMode(true);
   };
 
-  const handleNewChat = () => {
+  // const handleNewChat = () => {
+  //   console.log("[UI] New chat started");
+  //   setUserMessage("");
+  //   setAssistantMessage("");
+  //   setThinkingSteps([]);
+  //   setIsThinking(false);
+  //   setChatMode(false);
+  // };
+
+  const handleNewChat = async () => {
     console.log("[UI] New chat started");
+    
+    // ✅ Generate NEW session ID (but keep same user ID)
+    const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    localStorage.setItem("currentSessionId", newSessionId);
+    console.log("[Session] New session created:", newSessionId);
+    
+    // Clear UI state
     setUserMessage("");
     setAssistantMessage("");
     setThinkingSteps([]);
     setIsThinking(false);
     setChatMode(false);
-  };
-
+    
+    // ✅ Notify backend to clear OLD session
+    try {
+        const response = await fetch("http://localhost:8000/new-chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                session_id: sessionId,  // OLD session to clear
+                user_id: userId,        // SAME user
+            }),
+        });
+        
+        if (response.ok) {
+            console.log("✅ Backend session cleared");
+            // ✅ RELOAD PAGE to use new session ID
+            window.location.reload();
+        }
+    } catch (error) {
+        console.error("❌ Failed to notify backend:", error);
+        // Even if backend fails, still reload to use new session
+        window.location.reload();
+    }
+};
 
   /* ---------- THINKING STEPS SIMULATION ---------- */
   const startThinkingSequence = async () => {
+    // If server is sending real-time thinking updates, do not simulate locally
+    if (sseConnected) {
+      console.info('[Thinking] Server-side thinking active; skipping local simulation');
+      return;
+    }
+
+    setThinkingSteps([]);
     setIsThinking(true);
     const steps = ["Searching...", "Analyzing...", "Processing...", "Responding..."];
     
@@ -260,6 +387,7 @@ function App() {
           body: JSON.stringify({
             audio_data: base64,
             session_id: sessionId,
+            user_id: userId,
           }),
         });
 
@@ -338,18 +466,20 @@ function App() {
 
       console.log("[Agent] Clarification mode:", !!clarificationResponseToId);
 
-      // Start thinking sequence
-      await startThinkingSequence();
+      // Start thinking sequence (local simulation only when SSE not available)
+      if (!sseConnected) await startThinkingSequence();
 
       const res = await fetch("http://localhost:8000/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
+          user_id: userId,
           input: text,
           is_clarification: !!clarificationResponseToId,
           clarification_id: clarificationResponseToId || null,
           device_type: deviceType,
+          user_id:userId,
         }),
       });
 

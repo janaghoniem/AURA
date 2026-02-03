@@ -55,3 +55,20 @@ class ThinkingStepManager:
         if session_id in ThinkingStepManager.active_sessions:
             del ThinkingStepManager.active_sessions[session_id]
             logger.info(f"🧠 [{session_id}] Cleared thinking steps")
+
+        # Broadcast a clear message so clients can remove UI indicators
+        try:
+            clear_msg = AgentMessage(
+                message_type=MessageType.STATUS_UPDATE,
+                sender=AgentType.COORDINATOR,
+                receiver=AgentType.LANGUAGE,
+                session_id=session_id,
+                payload={
+                    "action": "thinking_clear",
+                    "session_id": session_id
+                }
+            )
+            await broker.publish(Channels.BROADCAST, clear_msg)
+            logger.info(f"🧠 [{session_id}] Broadcasted thinking_clear to clients")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to broadcast thinking_clear: {e}")

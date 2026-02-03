@@ -168,7 +168,7 @@ class Mem0PreferenceManager:
         self, 
         query: str, 
         limit: int = 10,  # ✅ INCREASED from 5 to 10
-        min_score: float = 0.65 # ✅ LOWERED from 0.65 to 0.3 (more permissive)
+        min_score: float = 0.25 # ✅ LOWERED from 0.65 to 0.3 (more permissive)
     ) -> List[Dict]:
         """
         Get preferences relevant to query with FIXED scoring
@@ -239,15 +239,26 @@ class Mem0PreferenceManager:
             # Limit to requested number
             relevant_memories = relevant_memories[:limit]
             
+            #here
             logger.info(
                 f"✅ Found {len(relevant_memories)}/{len(all_memories)} relevant preferences "
                 f"(threshold: {min_score}) for query: {query[:50]}..."
             )
+            # Fallback: if vector search returned nothing, use get_all()
+
+            # ✅ FIX: Ensure we always return a list, never None
+            if relevant_memories is None:
+                logger.warning("⚠️ relevant_memories is None, returning empty list")
+                return []
             
+            # ✅ FIX: Filter out any None entries before returning
+            relevant_memories = [m for m in relevant_memories if m is not None]
+            
+            logger.info(f"✅ Returning {len(relevant_memories)} valid memories (all non-None)")
             return relevant_memories
-            
+        
         except Exception as e:
-            logger.error(f"❌ Failed to retrieve preferences: {e}")
+            logger.error(f"❌ Failed to retrieve preferences: {e}", exc_info=True)
             return []
 
     def get_conversation_history(self, limit: int = 5) -> List:
@@ -273,17 +284,66 @@ class Mem0PreferenceManager:
         except Exception as e:
             logger.error(f"❌ Failed to get conversation history: {e}")
             return []
-
+    #here
     def get_all_preferences(self) -> List[Dict]:
-        """Get all preferences for the user"""
-        try:
-            memories = self.memory.get_all(user_id=self.user_id)
-            logger.info(f"✅ Retrieved {len(memories)} total preferences for {self.user_id}")
-            return memories
-        except Exception as e:
-            logger.error(f"❌ Failed to get all preferences: {e}")
-            return []
-    
+            """
+            Get ALL stored preferences for this user in proper dictionary format.
+            
+            Returns:
+                List[Dict]: Each dict has structure:
+                    {
+                        "id": "uuid-string",
+                        "memory": "The preference text",
+                        "metadata": {
+                            "category": "personal_info",
+                            "timestamp": 1234567890.123,
+                            "source": "user_input",
+                            ...
+                        }
+                    }
+            """
+            try:
+                logger.info(f"📥 Fetching all preferences for user {self.user_id}")
+                
+                # Mem0's get_all() returns a dict with 'results' key
+                response = self.memory.get_all(user_id=self.user_id)
+                
+                # Extract the actual memories from the response
+                if isinstance(response, dict) and "results" in response:
+                    raw_memories = response["results"]
+                elif isinstance(response, list):
+                    raw_memories = response
+                else:
+                    logger.warning(f"⚠️ Unexpected response format: {type(response)}")
+                    return []
+                
+                # Transform each memory into the expected format
+                formatted_memories = []
+                for mem in raw_memories:
+                    if isinstance(mem, dict):
+                        # Mem0 returns: {"id": "...", "memory": "...", "metadata": {...}}
+                        formatted_memories.append({
+                            "id": mem.get("id", ""),
+                            "memory": mem.get("memory", ""),
+                            "metadata": mem.get("metadata", {})
+                        })
+                    elif isinstance(mem, str):
+                        # Fallback for string-only memories (shouldn't happen with new Mem0)
+                        logger.warning(f"⚠️ Got string-only memory: {mem[:50]}...")
+                        formatted_memories.append({
+                            "id": "",
+                            "memory": mem,
+                            "metadata": {"category": "general"}
+                        })
+                
+                logger.info(f"✅ Retrieved {len(formatted_memories)} formatted preferences")
+                return formatted_memories
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to get all preferences: {e}", exc_info=True)
+                return []
+
+
     def delete_preference(self, memory_id: str) -> bool:
         """Delete a specific preference"""
         try:

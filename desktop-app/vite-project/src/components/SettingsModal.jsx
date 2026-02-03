@@ -42,7 +42,7 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
       setLoading(true);
       setStatusMessage(""); // Clear previous messages
       
-      const userId = localStorage.getItem("user_id") || "test_user";
+      const userId = localStorage.getItem("userId") || "test_user";
       
       console.log("📡 Fetching preferences from:", `${API_BASE_URL}/api/memory/preferences`);
       
@@ -96,7 +96,7 @@ const SettingsModal = ({ onClose, onSave, initialName = "Labubu" }) => {
       setLoading(true);
       setStatusMessage("🗑️ Clearing long-term memory...");
       
-      const userId = localStorage.getItem("user_id") || "test_user";
+      const userId = localStorage.getItem("userId") || "test_user";
       
       console.log("📡 Clearing preferences for user:", userId);
       
