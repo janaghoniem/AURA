@@ -1,4 +1,4 @@
-import os, uuid, asyncio, json
+import os, uuid, asyncio, json, re
 from dotenv import load_dotenv   
 from langgraph.graph import StateGraph, END
 from typing import Dict, Any, List, Optional, Literal
@@ -45,6 +45,108 @@ try:
 except Exception as e:
     logger.error(f"❌ Failed to initialize MongoDB checkpointer: {e}")
     checkpointer = None
+
+# ============================================================================
+# FIX 1: IMPROVED Credential Extraction Function (GENERIC FOR ANY SITE)
+# ============================================================================
+
+def extract_credentials_from_request(user_request: Dict) -> Dict[str, Optional[str]]:
+    """
+    Extract email and password from user request - WORKS FOR ANY WEBSITE.
+    
+    Examples:
+    - "login to facebook using hala@gmail.com and password Hala123"
+    - "sign in with test@example.com password: mypass"
+    - "login to gmail with user@example.com and password mypassword123"
+    - "sign up on amazon with email@domain.com password securepass"
+    - "register at example.com using email: user@example.com"
+    - "write password mypass"
+    """
+    
+    # ✅ FIX: Look in multiple fields for credentials
+    text = ""
+    if 'confirmation' in user_request:
+        text = str(user_request.get('confirmation', ''))
+    elif 'action' in user_request:
+        text = str(user_request.get('action', ''))
+    else:
+        text = str(user_request)
+    
+    logger.info(f"🔍 Extracting credentials from text: '{text}'")
+    
+    # Email extraction - enhanced pattern
+    email_patterns = [
+        r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',  # Standard email
+        r'email[\s:]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',  # "email: user@example.com"
+        r'using[\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',   # "using user@example.com"
+        r'with[\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})',    # "with user@example.com"
+    ]
+    
+    email = None
+    for pattern in email_patterns:
+        email_match = re.search(pattern, text, re.IGNORECASE)
+        if email_match:
+            email = email_match.group(1) if email_match.group(1) else email_match.group(0)
+            logger.info(f"📧 Found email using pattern: {pattern}")
+            break
+    
+    # Password extraction patterns - MORE COMPREHENSIVE FOR ANY SITE
+    password = None
+    
+    # Pattern priorities (most specific first)
+    password_patterns = [
+        # Direct password patterns
+        r'password[\s:]+([^\s,.!?]+)',      # "password mypass"
+        r'pwd[\s:]+([^\s,.!?]+)',           # "pwd mypass"
+        r'pass[\s:]+([^\s,.!?]+)',          # "pass mypass"
+        
+        # With connector words
+        r'and[\s]+password[\s:]+([^\s,.!?]+)',      # "and password mypass"
+        r'with[\s]+password[\s:]+([^\s,.!?]+)',     # "with password mypass"
+        r'using[\s]+password[\s:]+([^\s,.!?]+)',    # "using password mypass"
+        
+        # Complex patterns for any login/signup
+        r'(?:login|sign in|sign up|register|create account).*?password[\s:]+([^\s,.!?]+)',
+        
+        # Password after email
+        r'@[^\s]+[\s]+([^\s,.!?]{4,})',  # Word after email (min 4 chars)
+        
+        # Generic "password is X" pattern
+        r'password[\s]+is[\s]+([^\s,.!?]+)',
+    ]
+    
+    for pattern in password_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            password = match.group(1).strip()
+            # Clean up any trailing punctuation that might have been captured
+            password = password.rstrip('.,;!?')
+            logger.info(f"🔑 Found password using pattern: {pattern}")
+            break
+    
+    # If no password found with patterns, try to find word after common login phrases
+    if not password:
+        # Look for words after login/signin phrases
+        login_phrases = ['login', 'sign in', 'sign up', 'register', 'create account']
+        for phrase in login_phrases:
+            if phrase in text.lower():
+                # Find the phrase and get next 3 words
+                phrase_pos = text.lower().find(phrase)
+                if phrase_pos != -1:
+                    after_phrase = text[phrase_pos + len(phrase):].strip()
+                    words = after_phrase.split()
+                    # Look for a likely password (4+ chars, not email)
+                    for word in words[:3]:  # Check first 3 words
+                        if len(word) >= 4 and '@' not in word and '.' not in word:
+                            password = word
+                            logger.info(f"🔑 Assuming password after '{phrase}': {password}")
+                            break
+                if password:
+                    break
+    
+    logger.info(f"✅ Credential extraction result - Email: {email}, Password: {'[EXTRACTED]' if password else 'NOT FOUND'}")
+    
+    return {'email': email, 'password': password}
 
 # ============================================================================
 # WEB AUTOMATION SUPPORT - NO HARDCODED URLs
@@ -191,9 +293,44 @@ async def decompose_task_to_actions(
     user_request: Dict[str, Any],
     preferences_context: str,
     device_type: str = "desktop",
-    conversation_history: List[Dict] = None  # ✅ FIX 3: Add history parameter
+    conversation_history: List[Dict] = None,  # ✅ FIX 3: Add history parameter
+    session_id: str = None,  # ✅ FIX 5: Add this
+    http_request_id: str = None  # ✅ FIX 5: Add this
 ) -> Dict[str, Any]:
     """Decompose user request into ActionTask queue - URLs resolved by execution layer"""
+    
+    # ✅ FIX 2: Extract credentials FIRST - FOR ANY LOGIN/SIGNUP TASK
+    login_keywords = ['login', 'sign in', 'sign up', 'register', 'create account', 'log in']
+    is_login_task = any(keyword in str(user_request).lower() for keyword in login_keywords)
+    
+    credentials = None
+    if is_login_task:
+        credentials = extract_credentials_from_request(user_request)
+        
+        if not credentials.get('email'):
+            logger.error("❌ No email found in request")
+            return {
+                'error': 'Please provide an email address in your request (e.g., "login with user@example.com and password mypass123")',
+                'tasks': []
+            }
+        
+        if not credentials.get('password'):
+            logger.error("❌ No password found in request")
+            return {
+                'error': 'Please provide a password in your request (e.g., "login with user@example.com and password mypass123")',
+                'tasks': []
+            }
+        
+        logger.info(f"📧 Extracted email: {credentials['email']}")
+        logger.info(f"🔑 Password extracted (length: {len(credentials['password'])})")
+    
+    # ✅ FIX 5: Update thinking step
+    if session_id and http_request_id:
+        await ThinkingStepManager.update_step(
+            session_id,
+            "⚙️ Preparing tasks...",
+            http_request_id
+        )
     
     device_hint = f"The user is on a {device_type} device. Tailor task recommendations accordingly.\n\n"
     
@@ -213,8 +350,29 @@ async def decompose_task_to_actions(
 
 # USER PREFERENCES
 {preferences_context}
-{history_context}
+{history_context}"""
+    
+    # ✅ FIX 2: Add credentials section to prompt if applicable
+    if credentials:
+        prompt += f"""
+        
+# EXTRACTED CREDENTIALS (USE THESE EXACT VALUES):
+Email: {credentials['email']}
+Password: {credentials['password']}
 
+**CRITICAL**: When creating fill tasks for login/signup, use these EXACT values in web_params:
+- For email field: {{"action": "fill", "text": "{credentials['email']}"}}
+- For password field: {{"action": "fill", "text": "{credentials['password']}"}}
+
+DO NOT use placeholder values like "test_user_email" or "test_password".
+# OUTPUT RULES
+
+**FOR LOGIN TASKS**: When you see "Fill email field", you MUST use the actual email from above: "{credentials['email']}"
+**FOR PASSWORD TASKS**: When you see "Fill password field", you MUST use the actual password from above: "{credentials['password']}"
+
+"""
+    
+    prompt += f"""
 ============================
 CORE BEHAVIOR RULES
 ============================
@@ -332,7 +490,65 @@ Return:
 EXPLANATION: The ai_prompt "Navigate to Google homepage" will be sent to the web execution layer,
 which will use RAG to generate Playwright code that includes the URL https://www.google.com.
 
-## Example 3: Composite Web Task (E-commerce Search)
+## Example 3: Login Task (ANY WEBSITE)
+
+User: "Login to Gmail with user@example.com and password mypass123"
+
+Tasks:
+[
+  {{
+    "task_id": "task_1",
+    "ai_prompt": "Navigate to Gmail login page",
+    "device": "desktop",
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "navigate"
+    }},
+    "depends_on": null
+  }},
+  {{
+    "task_id": "task_2",
+    "ai_prompt": "Fill email field with user@example.com",
+    "device": "desktop",
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "fill",
+      "text": "user@example.com"
+    }},
+    "depends_on": "task_1"
+  }},
+  {{
+    "task_id": "task_3",
+    "ai_prompt": "Fill password field with mypass123",
+    "device": "desktop",
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "fill",
+      "text": "mypass123"
+    }},
+    "depends_on": "task_2"
+  }},
+  {{
+    "task_id": "task_4",
+    "ai_prompt": "Click login button",
+    "device": "desktop",
+    "context": "web",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{
+      "action": "click"
+    }},
+    "depends_on": "task_3"
+  }}
+]
+
+## Example 4: Composite Web Task (E-commerce Search)
 
 User: "Search Amazon for white socks and extract the first 5 product titles"
 
@@ -392,7 +608,7 @@ Tasks:
 EXPLANATION: Each ai_prompt is descriptive enough for RAG to generate the correct
 Playwright code with selectors, URLs, and wait strategies.
 
-## Example 4: Mixed Desktop + Web Task
+## Example 5: Mixed Desktop + Web Task
 
 User: "Search Google for 'Playwright tutorial' and copy the first result title to Notepad"
 
@@ -569,7 +785,9 @@ def create_coordinator_graph():
             raw_task, 
             preferences_context, 
             device_type,
-            conversation_history=state.get("conversation_history", [])
+            conversation_history=state.get("conversation_history", []),
+            session_id=session_id,  # ✅ FIX 5: Pass these parameters
+            http_request_id=original_message_id  # ✅ FIX 5: Pass these parameters
         )
         
         # Surface decomposition errors when present
@@ -955,6 +1173,18 @@ async def start_coordinator_agent(broker_instance):
     
     async def handle_task_from_language(message: AgentMessage):
         """Handle task from Language Agent"""
+        
+        http_request_id = message.response_to if message.response_to else message.message_id
+        user_id = message.payload.get("user_id", "default_user")
+        session_id = message.session_id
+
+        # ✅ FIX 5: STEP 1
+        await ThinkingStepManager.update_step(
+            session_id, 
+            "👀 Received your request...", 
+            http_request_id
+        )
+        
         # Log a helpful summary of the incoming payload: prefer the confirmation text if present
         payload_summary = message.payload.get('confirmation') or message.payload.get('action') or str(message.payload)
         try:
@@ -963,12 +1193,6 @@ async def start_coordinator_agent(broker_instance):
             payload_json = str(message.payload)
         logger.info(f"📨 Coordinator received confirmation: {payload_summary} | full_payload: {payload_json}")
 
-        http_request_id = message.response_to if message.response_to else message.message_id
-        user_id = message.payload.get("user_id", "default_user")
-        session_id = message.session_id
-
-        await ThinkingStepManager.update_step(session_id, "Formulating plan...", http_request_id)
-        
         if task_queue.has_tasks() and not task_queue.is_stopped:
             logger.info("📥 Adding task to global queue (currently executing)")
             task_queue.add_to_global(message.payload)
@@ -988,12 +1212,22 @@ async def start_coordinator_agent(broker_instance):
             }
         }
 
-        await ThinkingStepManager.update_step(session_id, "Decomposing tasks...", http_request_id)
+        # ✅ FIX 5: STEP 2 (before decomposition)
+        await ThinkingStepManager.update_step(
+            session_id, 
+            "🧠 Analyzing your request...", 
+            http_request_id
+        )
 
         result = await coordinator_graph.ainvoke(state_input, config)
         logger.info(f"✅ Task processing complete: {result.get('status')}")
         
-        await ThinkingStepManager.update_step(session_id, "Organizing execution...", http_request_id)
+        # ✅ FIX 5: STEP 3
+        await ThinkingStepManager.update_step(
+            session_id, 
+            "📋 Creating execution plan...", 
+            http_request_id
+        )
     
     async def handle_action_result(message: AgentMessage):
         """
