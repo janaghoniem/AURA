@@ -245,6 +245,8 @@ A COMPOSITE request:
 
 3. Always prefer the MINIMAL valid execution plan.
 
+4. For configuration tasks (setting alarms, filling forms, creating events), always include a final confirmation step to ensure the task is completed (e.g., "Press OK to save the alarm").
+
 # DEVICE & CONTEXT
 
 - **device**: "desktop" or "mobile"
@@ -457,6 +459,44 @@ Tasks:
   }}
 ]
 
+## Example 5: Mobile Configuration Task
+
+User: "Set the alarm for 7 am"
+
+Tasks:
+[
+  {{
+    "task_id": "task_1",
+    "ai_prompt": "Open the Clock app on mobile device",
+    "device": "mobile",
+    "context": "local",
+    "target_agent": "action",
+    "extra_params": {{"app_name": "clock"}},
+    "web_params": {{}},
+    "depends_on": null
+  }},
+  {{
+    "task_id": "task_2",
+    "ai_prompt": "Set the alarm time to 7:00 AM",
+    "device": "mobile",
+    "context": "local",
+    "target_agent": "action",
+    "extra_params": {{"time": "7:00"}},
+    "web_params": {{}},
+    "depends_on": "task_1"
+  }},
+  {{
+    "task_id": "task_3",
+    "ai_prompt": "Press OK or Save to confirm the alarm setting",
+    "device": "mobile",
+    "context": "local",
+    "target_agent": "action",
+    "extra_params": {{}},
+    "web_params": {{}},
+    "depends_on": "task_2"
+  }}
+]
+
 # CRITICAL RULES
 
 1. **One action per task** - never combine multiple actions
@@ -467,6 +507,7 @@ Tasks:
 6. **NO URLs** - NEVER hardcode URLs, let RAG resolve them from ai_prompt
 7. **NO selectors** - NEVER hardcode selectors, let RAG find them from ai_prompt
 8. **Empty web_params** - For local tasks, set web_params: {{}}
+9. **Include confirmation steps** - For configuration tasks (alarms, forms, settings), always add a final task to confirm/save changes
 
 ============================
 OUTPUT RULES
