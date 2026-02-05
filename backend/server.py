@@ -11,10 +11,14 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-# Use Google Cloud Speech-to-Text and Text-to-Speech
-from google.cloud import speech
-from google.cloud import texttospeech
-
+# Use Google Gemini API for transcription and TTS
+from google import genai
+from google.genai import types
+from gtts import gTTS
+import tempfile
+from pathlib import Path
+import base64
+import logging
 # Import broker and agents
 from agents.utils.broker import broker
 from agents.language_agent import start_language_agent
@@ -34,14 +38,6 @@ from memory_api import router as memory_router
 
 load_dotenv()
 
-# Debug: Check which .env file was loaded and what keys are set
-logger_debug = logging.getLogger("server_init")
-google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-if google_creds:
-    logger_debug.info(f"🔑 GOOGLE_APPLICATION_CREDENTIALS loaded: {google_creds}")
-else:
-    logger_debug.warning("❌ GOOGLE_APPLICATION_CREDENTIALS NOT found in environment! Set path to service account JSON in this variable.")
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -52,19 +48,17 @@ logger = logging.getLogger(__name__)
 # Store pending responses (for HTTP API)
 pending_responses = {}
 
-# Initialize Google Cloud Speech and Text-to-Speech clients
-GOOGLE_CREDS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-if not GOOGLE_CREDS:
-    logger.warning("⚠️ GOOGLE_APPLICATION_CREDENTIALS not set - Google Cloud speech services may not work")
+# Initialize Google Gemini API client using new SDK
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
+if not GEMINI_KEY:
+    logger.warning("❌ GEMINI_API_KEY not set - Gemini services may not work")
 
 try:
-    speech_client = speech.SpeechClient()
-    tts_client = texttospeech.TextToSpeechClient()
-    logger.info("✅ Google Cloud Speech and TTS clients initialized")
+    genai_client = genai.Client(api_key=GEMINI_KEY)
+    logger.info("✅ Google Gemini client initialized")
 except Exception as e:
-    logger.error(f"❌ Failed to initialize Google Cloud clients: {e}")
-    speech_client = None
-    tts_client = None
+    logger.error(f"❌ Failed to initialize Gemini client: {e}")
+    genai_client = None
 
 
 @asynccontextmanager
@@ -146,121 +140,80 @@ logger.info("✅ CORS middleware configured")
 # HTTP API Endpoints
 # ============================================================================
 
-import re
 
-def detect_language(text: str) -> str:
-    """
-    Detect if text is primarily Arabic or English
-    Returns: 'arabic', 'english', or 'mixed'
-    """
-    # Count Arabic characters
-    arabic_chars = len(re.findall(r'[\u0600-\u06FF]', text))
-    # Count English letters
-    english_chars = len(re.findall(r'[a-zA-Z]', text))
-    
-    total_chars = arabic_chars + english_chars
-    if total_chars == 0:
-        return 'english'  # Default to English for numbers/symbols only
-    
-    arabic_ratio = arabic_chars / total_chars
-    
-    if arabic_ratio > 0.7:
-        return 'arabic'
-    elif arabic_ratio < 0.3:
-        return 'english'
-    else:
-        return 'mixed'
-
+logger = logging.getLogger(__name__)
 
 @app.post("/text-to-speech")
 async def text_to_speech(request: Request):
     """
-    Convert text to speech using Google Cloud Text-to-Speech.
-    Supports language auto-detection and voice/dialect selection via `voice_name` or `language`.
-    Returns MP3 audio in base64.
+    Convert text to speech using gTTS (Google Text-to-Speech)
+    
+    ✅ Supports both Arabic and English
+    ✅ Auto-detects language
+    ✅ Always works (no API quota issues)
+    ✅ Returns base64-encoded audio
     """
     try:
         logger.info("🔊 Received TTS request")
-
-        if not tts_client:
-            logger.error("❌ Google TTS client not initialized")
-            raise HTTPException(status_code=500, detail="TTS service not available")
-
+        
         data = await request.json()
         text = data.get("text", "").strip()
-        voice_name = data.get("voice_name")
-        force_voice = data.get("force_voice", False)
-        requested_language = data.get("language")
-
+        lang = data.get("lang", None)  # None = auto-detect
+        
         if not text:
             logger.error("❌ No text provided for TTS")
             raise HTTPException(status_code=400, detail="Missing 'text' field")
-
-        detected_lang = detect_language(text)
-        logger.info(f"🔍 Detected language: {detected_lang}")
-
-        # Language/dialect resolution
-        # If client provided explicit language/dialect, prefer it (example: 'ar-EG' or 'ar-SA')
-        language_code = None
-        if requested_language:
-            # Normalize common short forms
-            if requested_language.lower().startswith('ar'):
-                # Map variants to Google-style codes
-                language_code = requested_language if '-' in requested_language else f"{requested_language}-SA"
-            elif requested_language.lower().startswith('en'):
-                language_code = requested_language if '-' in requested_language else "en-US"
-        else:
-            language_map = {"arabic": "ar-SA", "english": "en-US", "mixed": "en-US"}
-            language_code = language_map.get(detected_lang, "en-US")
-
-        # Voice mapping - friendly names -> Google voices (common Wavenet)
-        voice_mapping = {
-            "Gacrux": "en-US-Wavenet-D",
-            "default_en": "en-US-Wavenet-F",
-            "default_ar": "ar-XA-Wavenet-A",
-            "orpheus-english": "en-US-Wavenet-F",
-            "orpheus-arabic": "ar-XA-Wavenet-A",
-        }
-
-        if not voice_name or not force_voice:
-            if detected_lang == 'arabic':
-                voice_name = 'orpheus-arabic'
+        
+        logger.info(f"🗣️ Generating speech for: '{text[:50]}...'")
+        
+        # Auto-detect language if not specified
+        if not lang:
+            # Simple heuristic: check if text contains Arabic characters
+            if any('\u0600' <= char <= '\u06FF' for char in text):
+                lang = 'ar'  # Arabic
+                logger.info("🌐 Detected language: Arabic")
             else:
-                voice_name = voice_name or 'Gacrux'
-
-        google_voice = voice_mapping.get(voice_name, voice_mapping['Gacrux'])
-
-        synthesis_input = texttospeech.SynthesisInput(text=text)
-
-        voice_params = texttospeech.VoiceSelectionParams(
-            language_code=language_code,
-            name=google_voice,
-            ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
-        )
-
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3
-        )
-
-        response = tts_client.synthesize_speech(
-            input=synthesis_input,
-            voice=voice_params,
-            audio_config=audio_config,
-        )
-
-        audio_content = response.audio_content
-        base64_audio = base64.b64encode(audio_content).decode('utf-8')
-
-        return {
-            "status": "success",
-            "audio_data": base64_audio,
-            "format": "mp3",
-            "sample_rate": 24000,
-            "voice_used": google_voice,
-            "detected_language": detected_lang,
-            "language_code": language_code,
-        }
-
+                lang = 'en'  # English
+                logger.info("🌐 Detected language: English")
+        else:
+            logger.info(f"🌐 Using specified language: {lang}")
+        
+        # Generate TTS with gTTS
+        # slow=False for natural speed
+        tts = gTTS(text=text, lang=lang, slow=False)
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_audio:
+            tts.save(tmp_audio.name)
+            tmp_path = tmp_audio.name
+        
+        try:
+            # Read the audio file
+            with open(tmp_path, "rb") as audio_file:
+                audio_bytes = audio_file.read()
+            
+            logger.info(f"✅ Generated {len(audio_bytes)} bytes of audio")
+            
+            # Encode to base64
+            base64_audio = base64.b64encode(audio_bytes).decode('utf-8')
+            logger.info(f"✅ Encoded {len(base64_audio)} base64 characters")
+            
+            return {
+                "status": "success",
+                "audio_data": base64_audio,
+                "format": "mp3",
+                "language": lang,
+                "provider": "gtts"
+            }
+            
+        finally:
+            # Cleanup temp file
+            try:
+                Path(tmp_path).unlink()
+                logger.info(f"🗑️ Cleaned up temp file: {tmp_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to delete temp file: {e}")
+                
     except HTTPException:
         raise
     except Exception as e:
@@ -270,69 +223,89 @@ async def text_to_speech(request: Request):
 @app.post("/transcribe")
 async def transcribe_audio(request: Request):
     """
-    Transcribe audio using Google Cloud Speech-to-Text.
-    Accepts base64-encoded audio bytes and optional `language` or `language_hints` to favor dialects.
+    Transcribe audio using Google Gemini with file upload.
+    Supports bilingual Arabic/English transcription.
+    Accepts base64-encoded audio bytes.
     """
     try:
         logger.info("🎤 Received audio transcription request")
 
-        if not speech_client:
-            logger.error("❌ Google Speech client not initialized")
-            raise HTTPException(status_code=500, detail="Transcription service not available")
+        if not genai_client:
+            logger.error("❌ Google Gemini client not initialized")
+            raise HTTPException(status_code=500, detail="Transcription service not available - GEMINI_API_KEY not set")
 
         data = await request.json()
         audio_data = data.get("audio_data", "")
         session_id = data.get("session_id", "default")
-        requested_language = data.get("language")  # e.g., 'ar-SA' or 'ar-EG' or 'en-US'
-        language_hints = data.get("language_hints", [])  # list of languages to assist
 
         if not audio_data:
             raise HTTPException(status_code=400, detail="Missing 'audio_data'")
 
         audio_bytes = base64.b64decode(audio_data)
+        logger.info(f"📦 Received {len(audio_bytes)} bytes of audio data")
 
-        # Try to detect common encodings
-        if audio_bytes[:4] == b'RIFF':
-            encoding = speech.RecognitionConfig.AudioEncoding.LINEAR16
-        elif audio_bytes[:3] == b'ID3' or audio_bytes[:2] == b'\xff\xfb':
-            encoding = speech.RecognitionConfig.AudioEncoding.MP3
-        elif audio_bytes[:4] == b"\x1A\x45\xDF\xA3":
-            encoding = speech.RecognitionConfig.AudioEncoding.WEBM_OPUS
-        else:
-            encoding = speech.RecognitionConfig.AudioEncoding.ENCODING_UNSPECIFIED
+        # Save to temp file for Gemini upload
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
 
-        # Determine language code: prefer explicit request, otherwise default to Arabic+English hints
-        if requested_language:
-            language_code = requested_language
-        else:
-            language_code = "en-US"
+        try:
+            # Upload file to Gemini using new SDK
+            logger.info(f"📤 Uploading audio file to Gemini: {tmp_path}")
+            uploaded_file = genai_client.files.upload(file=tmp_path)
+            logger.info(f"✅ File uploaded with URI: {uploaded_file.uri}")
 
-        # If no hints provided, offer both Arabic and English to allow mixed recognition
-        if not language_hints:
-            language_hints = ["ar-SA", "en-US"]
+            # Transcription prompt for bilingual support
+            prompt = """
+You are a speech transcription system designed for bilingual users (Arabic and English).
 
-        config = speech.RecognitionConfig(
-            encoding=encoding,
-            sample_rate_hertz=16000,
-            language_code=language_code,
-            alternative_language_codes=language_hints,
-            enable_automatic_punctuation=True,
-        )
+Your task:
+1. Accurately transcribe the audio exactly as spoken.
+2. The speech may contain a mix of Arabic and English words.
+3. If the speaker mentions a command such as "open calculator", "open WhatsApp", "افتح calculator", etc.:
+   - Detect the app or command name, even if the rest of the sentence is Arabic.
+   - Keep the **app or command name in English**, exactly as said (for example: "افتح calculator").
+4. Do NOT translate any Arabic words.
+5. Do NOT invent or guess missing words.
+6. If the audio is silent, unclear, or contains no recognizable speech, respond exactly with:
+   "Couldn't catch that. Please try again."
 
-        audio = speech.RecognitionAudio(content=audio_bytes)
+Formatting rules:
+- Return ONLY the final transcript text, nothing else.
+- No punctuation or additional commentary.
+- Keep mixed-language sentences exactly as spoken.
 
-        # Use sync recognition for small audio; client can switch to long-running for longer recordings
-        response = speech_client.recognize(config=config, audio=audio)
+Examples:
+Arabic only → "افتح الكاميرا"
+Mixed → "افتح calculator"
+English → "open calendar"
+Silent → "Couldn't catch that. Please try again."
+"""
 
-        transcript = " ".join([r.alternatives[0].transcript for r in response.results]) if response.results else ""
+            # Generate transcript using new SDK
+            logger.info("🔄 Sending to Gemini for transcription...")
+            response = genai_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt, uploaded_file]
+            )
 
-        if not transcript or len(transcript) < 2:
-            logger.warning("⚠️ Empty or silent audio detected")
-            transcript = "Couldn't catch that. Please try again."
+            transcript = response.text.strip() if response.text else ""
 
-        logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
+            if not transcript or len(transcript) < 2:
+                logger.warning("⚠️ Empty or silent audio detected")
+                transcript = "Couldn't catch that. Please try again."
 
-        return {"status": "success", "transcript": transcript, "session_id": session_id}
+            logger.info(f"📝 TRANSCRIBED TEXT: '{transcript}'")
+
+            return {"status": "success", "transcript": transcript, "session_id": session_id}
+
+        finally:
+            # Cleanup temp file
+            try:
+                Path(tmp_path).unlink()
+                logger.info(f"🗑️ Cleaned up temp file: {tmp_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to delete temp file: {e}")
 
     except Exception as e:
         logger.error(f"❌ Transcription error: {e}", exc_info=True)
@@ -601,8 +574,8 @@ async def health_check():
         "service": "YUSR Unified Backend (Pub/Sub)",
         "version": "3.0.0",
         "broker": "running" if broker.running else "stopped",
-        "transcription": "available (Google Speech-to-Text)" if speech_client else "unavailable",
-        "tts": "available (Google Text-to-Speech)" if tts_client else "unavailable"
+        "transcription": "available (Google Gemini)" if genai_client else "unavailable",
+        "tts": "available (Google Gemini TTS)" if genai_client else "unavailable"
     }
 
 
@@ -702,4 +675,3 @@ if __name__ == "__main__":
         port=port,
         log_level="info"
     )
-

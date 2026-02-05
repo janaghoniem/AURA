@@ -542,63 +542,105 @@ function App() {
 
   /* ---------- TEXT → SPEECH ---------- */
   const speakResponse = async (text) => {
-    try {
-      console.log("[TTS] Generating speech for:", text);
+  try {
+    console.log("[TTS] Generating speech for:", text);
 
-      const res = await fetch("http://localhost:8000/text-to-speech", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          voice_name: ttsVoice,
-        }),
-      });
+    const res = await fetch("http://localhost:8000/text-to-speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        voice_name: ttsVoice,
+      }),
+    });
 
-      const data = await res.json();
-      console.log("[TTS] Response received");
+    const data = await res.json();
+    console.log("[TTS] Response received:", {
+      status: data.status,
+      format: data.format,
+      language: data.language,
+      provider: data.provider,
+      audioDataLength: data.audio_data?.length
+    });
 
-      if (!res.ok) {
-        throw new Error(data.detail || "TTS failed");
-      }
-
-      const binaryString = atob(data.audio_data);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      // Server returns MP3 now
-      const audioBlob = new Blob([bytes], { type: "audio/mpeg" });
-
-      const url = URL.createObjectURL(audioBlob);
-      console.log("[TTS] Audio blob created, URL:", url);
-      
-      audioRef.current.src = url;
-
-      audioRef.current.oncanplaythrough = async () => {
-        console.log("[TTS] Audio ready, playing...");
-        setOrbState("speaking");
-        await audioRef.current.play().catch(err => {
-          console.error("[TTS] Play error:", err);
-        });
-      };
-
-      audioRef.current.onended = () => {
-        console.log("[TTS] Playback finished");
-        URL.revokeObjectURL(url);
-        setOrbState("idle");
-      };
-
-      audioRef.current.onerror = (err) => {
-        console.error("[TTS] Audio error:", err);
-        setOrbState("idle");
-      };
-
-      audioRef.current.load();
-    } catch (error) {
-      console.error("[TTS] Error:", error);
-      setOrbState("idle");
+    if (!res.ok) {
+      throw new Error(data.detail || "TTS failed");
     }
-  };
+
+    // ✅ FIX 1: Use the format from the response
+    const format = data.format || 'mp3';
+    console.log("[TTS] Audio format:", format);
+
+    // ✅ FIX 2: Convert base64 to blob correctly
+    const binaryString = atob(data.audio_data);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    
+    // ✅ FIX 3: Use correct MIME type based on format
+    const mimeType = format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+    const audioBlob = new Blob([bytes], { type: mimeType });
+    console.log("[TTS] Audio blob created:", {
+      size: audioBlob.size,
+      type: audioBlob.type
+    });
+
+    const url = URL.createObjectURL(audioBlob);
+    console.log("[TTS] Audio blob URL:", url);
+    
+    // ✅ FIX 4: Set source and add better error handling
+    audioRef.current.src = url;
+
+    // ✅ FIX 5: Add all event listeners BEFORE loading
+    audioRef.current.onloadeddata = () => {
+      console.log("[TTS] Audio loaded, duration:", audioRef.current.duration);
+    };
+
+    audioRef.current.oncanplaythrough = async () => {
+      console.log("[TTS] Audio ready to play");
+      setOrbState("speaking");
+      
+      try {
+        await audioRef.current.play();
+        console.log("[TTS] Playback started successfully");
+      } catch (playError) {
+        console.error("[TTS] Play error:", playError);
+        
+        // ✅ FIX 6: Handle autoplay blocking
+        if (playError.name === 'NotAllowedError') {
+          console.warn("[TTS] Autoplay blocked");
+        }
+        setOrbState("idle");
+      }
+    };
+
+    audioRef.current.onended = () => {
+      console.log("[TTS] Playback finished");
+      URL.revokeObjectURL(url);
+      setOrbState("idle");
+    };
+
+    audioRef.current.onerror = (err) => {
+      console.error("[TTS] Audio error:", err);
+      console.error("[TTS] Error details:", {
+        code: audioRef.current.error?.code,
+        message: audioRef.current.error?.message
+      });
+      URL.revokeObjectURL(url);
+      setOrbState("idle");
+    };
+
+    // ✅ FIX 7: Load the audio
+    console.log("[TTS] Loading audio...");
+    audioRef.current.load();
+
+  } catch (error) {
+    console.error("[TTS] Error:", error);
+    setOrbState("idle");
+  }
+};
+
 
   /* ---------- RENDER ---------- */
   return (
