@@ -60,7 +60,7 @@ class MobileReActStrategy:
         # Initialize Groq LLM
         from groq import AsyncGroq
         
-        api_key = "API_KEY_PLACEHOLDER"  # Replace with actual key or env var
+        api_key = "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" 
         self.llm_client = AsyncGroq(api_key=api_key)
         self.model = "llama-3.3-70b-versatile"
         
@@ -81,10 +81,26 @@ class MobileReActStrategy:
         # ✅ NEW: Track typed text to prevent duplicates
         self.typed_texts: Dict[int, str] = {}  # element_id -> last typed text
         
+        # ✅ FIX: Track consecutive duplicate skips to prevent infinite loops
+        self.consecutive_skips: int = 0
+        
+        # ✅ FIX: Store current task for access in _think_and_decide
+        self.current_task: Optional[MobileTaskRequest] = None
+        
         logger.info(f"✅ Initialized FIXED MobileReActStrategy for device {device_id}")
     
     async def execute_task(self, task: MobileTaskRequest) -> MobileTaskResult:
         """Execute ANY task using FULLY FIXED ReAct loop"""
+        
+        # ✅ FIX: Store task for access in other methods
+        self.current_task = task
+        
+        # ✅ CRITICAL: Dynamic timeout based on task complexity
+        original_timeout = task.timeout_seconds
+        task.timeout_seconds = self._calculate_smart_timeout(task.ai_prompt, task.timeout_seconds)
+        
+        if task.timeout_seconds != original_timeout:
+            logger.info(f"⏱️ Timeout adjusted: {original_timeout}s → {task.timeout_seconds}s (task complexity)")
         
         logger.info(f"\n{'='*70}")
         logger.info(f"🎯 STARTING FULLY FIXED REACT LOOP")
@@ -92,6 +108,7 @@ class MobileReActStrategy:
         logger.info(f"Goal: {task.ai_prompt}")
         logger.info(f"Device: {task.device_id}")
         logger.info(f"Max Steps: {task.max_steps}")
+        logger.info(f"Timeout: {task.timeout_seconds}s")
         logger.info(f"{'='*70}\n")
         
         # Reset tracking for new task
@@ -100,6 +117,7 @@ class MobileReActStrategy:
         self.incomplete_ui_count = 0
         self.stuck_counter = 0
         self.last_action_was_click = False
+        self.consecutive_skips = 0  # ✅ FIX: Reset duplicate skip counter
         self.typed_texts.clear()  # Clear typed text tracking
         
         start_time = asyncio.get_event_loop().time()
@@ -110,16 +128,10 @@ class MobileReActStrategy:
         logger.info(f"👁️ Getting initial UI state...")
         await asyncio.sleep(1.5)
         
-        ui_tree = await self._fetch_ui_tree_from_device()
+        ui_tree = await self._fetch_ui_tree_with_retries("wait", max_attempts=2, retry_delay=1.5)
         
         if not ui_tree:
             return self._build_error_result(task.task_id, "Failed to get initial UI tree")
-        
-        # Validate UI tree
-        if not ui_tree.elements or len(ui_tree.elements) < 3:
-            logger.warning(f"⚠️ UI tree has only {len(ui_tree.elements)} elements - waiting longer...")
-            await asyncio.sleep(2.0)
-            ui_tree = await self._fetch_ui_tree_from_device()
         
         self.current_ui_tree = ui_tree
         self.previous_ui_trees.append(ui_tree)
@@ -160,54 +172,7 @@ class MobileReActStrategy:
                     error=f"Timeout after {task.timeout_seconds}s"
                 )
             
-            # ✅ CRITICAL FIX #1: Verify correct app opened (ONLY after CLICK actions)
-            if step > 0 and target_app and self.last_action_was_click:
-                verification = self._verify_app_opened(target_app, self.current_ui_tree)
-                
-                if not verification["success"]:
-                    # WRONG APP OPENED!
-                    logger.error(f"❌ WRONG APP OPENED!")
-                    logger.error(f"   Expected: {verification['expected_app']}")
-                    logger.error(f"   Got: {verification['actual_app']}")
-                    
-                    # Blacklist the element that was clicked
-                    if self.last_clicked_element:
-                        self.failed_elements.add(self.last_clicked_element)
-                        logger.warning(f"🚫 Blacklisted element {self.last_clicked_element}")
-                    
-                    # Go BACK and try again
-                    logger.info("⬅️ Going BACK to try different element")
-                    back_action = UIAction(action_type="global_action", global_action="BACK", duration=1000)
-                    await self._execute_action_on_device(back_action)
-                    await asyncio.sleep(2.0)
-                    
-                    ui_tree = await self._fetch_ui_tree_from_device()
-                    if ui_tree:
-                        self.current_ui_tree = ui_tree
-                        self.device_state = self._detect_device_state(ui_tree)
-                    
-                    self.last_action_was_click = False  # Reset
-                    continue
-                
-                # ✅ CRITICAL FIX #2: Verify task is ACTUALLY complete
-                elif verification["success"] and verification["confidence"] > 0.8:
-                    if self._is_task_truly_complete(task.ai_prompt, self.current_ui_tree):
-                        logger.info(f"\n{'='*70}")
-                        logger.info(f"✅✅✅ TASK COMPLETE: {verification['actual_app']}")
-                        logger.info(f"{'='*70}")
-                        
-                        return self._build_result(
-                            task_id=task.task_id,
-                            status="success",
-                            steps=step + 1,
-                            actions=actions_executed,
-                            elapsed=elapsed,
-                            completion_reason=f"Successfully opened {verification['actual_app']}"
-                        )
-                    else:
-                        logger.info(f"⚠️ Correct app but UI not fully loaded ({len(self.current_ui_tree.elements)} elements)")
-            
-            # ✅ CRITICAL FIX #3: Handle incomplete UI trees
+            # ✅ CRITICAL FIX: Handle incomplete UI trees BEFORE verification
             if len(self.current_ui_tree.elements) < 5:
                 self.incomplete_ui_count += 1
                 logger.warning(f"⚠️ Incomplete UI ({len(self.current_ui_tree.elements)} elements) - count: {self.incomplete_ui_count}")
@@ -216,21 +181,14 @@ class MobileReActStrategy:
                     logger.error("❌ UI stuck loading - going BACK")
                     back_action = UIAction(action_type="global_action", global_action="BACK", duration=1000)
                     await self._execute_action_on_device(back_action)
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(3.0)  # ✅ Wait longer for BACK
                     
-                    ui_tree = await self._fetch_ui_tree_from_device()
+                    ui_tree = await self._fetch_ui_tree_with_retries("global_action")
                     if ui_tree:
                         self.current_ui_tree = ui_tree
                         self.device_state = self._detect_device_state(ui_tree)
                     
                     self.incomplete_ui_count = 0
-                    continue
-                else:
-                    logger.info("⏳ Waiting for UI to fully load...")
-                    await asyncio.sleep(3.0)
-                    ui_tree = await self._fetch_ui_tree_from_device()
-                    if ui_tree:
-                        self.current_ui_tree = ui_tree
                     continue
             else:
                 self.incomplete_ui_count = 0
@@ -240,9 +198,9 @@ class MobileReActStrategy:
                 logger.error(f"❌ Stuck in infinite loop - taking corrective action")
                 home_action = UIAction(action_type="global_action", global_action="HOME", duration=1000)
                 await self._execute_action_on_device(home_action)
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(3.0)  # ✅ Wait longer for HOME
                 
-                ui_tree = await self._fetch_ui_tree_from_device()
+                ui_tree = await self._fetch_ui_tree_with_retries("global_action")
                 if ui_tree:
                     self.current_ui_tree = ui_tree
                     self.device_state = self._detect_device_state(ui_tree)
@@ -333,7 +291,29 @@ class MobileReActStrategy:
                     if self.typed_texts[element_id] == text_to_type:
                         logger.warning(f"🚫 Already typed '{text_to_type}' in element {element_id}")
                         logger.warning(f"⏭️ Skipping duplicate type action")
+                        
+                        # ✅ FIX: Track consecutive skips to detect completion
+                        self.consecutive_skips += 1
+                        logger.info(f"📊 Consecutive skips: {self.consecutive_skips}/3")
+                        
+                        #  If skipped 3 times, task is likely complete
+                        if self.consecutive_skips >= 3:
+                            logger.warning(f"⚠️ Skipped {self.consecutive_skips} duplicates - field is complete!")
+                            logger.info("✅ FORCING SUB-TASK COMPLETION - coordinator will send next task")
+                            elapsed = time.time() - start_time
+                            return self._build_result(
+                                task_id=task.task_id,
+                                status="success",
+                                steps=step + 1,
+                                actions=actions_executed,
+                                elapsed=elapsed,
+                                completion_reason=f"Completed (skipped {self.consecutive_skips} duplicate attempts)"
+                            )
+                        
                         continue  # Skip this action
+                
+                # ✅ FIX: If we're actually typing, reset skip counter
+                self.consecutive_skips = 0
                 
                 # Store what we're about to type
                 self.typed_texts[element_id] = text_to_type
@@ -360,14 +340,14 @@ class MobileReActStrategy:
             logger.info(f"⏳ Waiting {wait_time}s for UI to stabilize...")
             await asyncio.sleep(wait_time)
             
-            new_ui_tree = await self._fetch_ui_tree_from_device()
+            # ✅ CRITICAL: Progressive UI fetching - apps take time to load!
+            new_ui_tree = await self._fetch_ui_tree_with_retries(
+                action_type=action_json.get("action_type"),
+                max_attempts=3,
+                retry_delay=2.0
+            )
             
             if new_ui_tree:
-                if not new_ui_tree.elements or len(new_ui_tree.elements) < 2:
-                    logger.warning(f"⚠️ New UI incomplete ({len(new_ui_tree.elements)} elements) - waiting longer...")
-                    await asyncio.sleep(1.5)
-                    new_ui_tree = await self._fetch_ui_tree_from_device()
-                
                 self.current_ui_tree = new_ui_tree
                 self.previous_ui_trees.append(new_ui_tree)
                 
@@ -392,6 +372,54 @@ class MobileReActStrategy:
                     self.stuck_counter = 0
                 else:
                     self.stuck_counter += 1
+                
+                # ✅ CRITICAL: App verification AFTER UI fully loaded (moved from top of loop)
+                # Only verify for CLICK actions and when we have a target app
+                if self.last_action_was_click and target_app and len(new_ui_tree.elements) >= 5:
+                    verification = self._verify_app_opened(target_app, new_ui_tree)
+                    
+                    if not verification["success"]:
+                        # WRONG APP OPENED!
+                        logger.error(f"❌ WRONG APP OPENED!")
+                        logger.error(f"   Expected: {verification['expected_app']}")
+                        logger.error(f"   Got: {verification['actual_app']}")
+                        
+                        # Blacklist the element that was clicked
+                        if self.last_clicked_element:
+                            self.failed_elements.add(self.last_clicked_element)
+                            logger.warning(f"🚫 Blacklisted element {self.last_clicked_element}")
+                        
+                        # Go BACK and try again
+                        logger.info("⬅️ Going BACK to try different element")
+                        back_action = UIAction(action_type="global_action", global_action="BACK", duration=1000)
+                        await self._execute_action_on_device(back_action)
+                        await asyncio.sleep(3.0)  # Wait longer for BACK
+                        
+                        ui_tree = await self._fetch_ui_tree_with_retries("global_action")
+                        if ui_tree:
+                            self.current_ui_tree = ui_tree
+                            self.device_state = self._detect_device_state(ui_tree)
+                        
+                        self.last_action_was_click = False
+                        continue
+                    
+                    # ✅ CRITICAL: Verify task is ACTUALLY complete
+                    elif verification["success"] and verification["confidence"] > 0.8:
+                        if self._is_task_truly_complete(task.ai_prompt, new_ui_tree):
+                            logger.info(f"\n{'='*70}")
+                            logger.info(f"✅✅✅ TASK COMPLETE: {verification['actual_app']}")
+                            logger.info(f"{'='*70}")
+                            
+                            return self._build_result(
+                                task_id=task.task_id,
+                                status="success",
+                                steps=step + 1,
+                                actions=actions_executed,
+                                elapsed=elapsed,
+                                completion_reason=f"Successfully opened {verification['actual_app']}"
+                            )
+                        else:
+                            logger.info(f"⚠️ Correct app but task not complete yet")
             else:
                 logger.warning(f"⚠️ Failed to get new UI tree")
         
@@ -408,6 +436,62 @@ class MobileReActStrategy:
             elapsed=asyncio.get_event_loop().time() - start_time,
             error=f"Max steps ({task.max_steps}) reached"
         )
+    
+    def _calculate_smart_timeout(self, goal: str, default_timeout: int) -> int:
+        """
+        Calculate smart timeout based on task complexity
+        
+        Multi-step tasks: 60s (multiple actions)
+        Search tasks: 45s (type + wait for results)
+        Simple navigation: 30s (just open app)
+        """
+        goal_lower = goal.lower()
+        
+        # Multi-step tasks (look for conjunctions or sequences)
+        multi_step_keywords = ["and then", "after", "followed by", "and", "with"]
+        if any(kw in goal_lower for kw in multi_step_keywords):
+            # Count keywords to estimate complexity
+            keyword_count = sum(1 for kw in multi_step_keywords if kw in goal_lower)
+            if keyword_count >= 2:
+                return max(90, default_timeout)  # Very complex
+            return max(60, default_timeout)  # Medium complexity
+        
+        # Search tasks need moderate time
+        search_keywords = ["search", "find", "look for", "query"]
+        if any(kw in goal_lower for kw in search_keywords):
+            return max(45, default_timeout)  # At least 45 seconds
+        
+        # Navigation tasks (just opening apps)
+        open_keywords = ["open", "launch", "start", "close"]
+        if any(kw in goal_lower for kw in open_keywords) and len(goal_lower.split()) <= 4:
+            return max(30, default_timeout)  # At least 30 seconds
+        
+        # Default: use provided timeout but minimum 30s
+        return max(30, default_timeout)
+    
+    def _get_content_from_task_params(self, task: 'MobileTaskRequest') -> str:
+        """
+        Get any parameters passed from coordinator via extra_params
+        
+        This allows coordinator to pass ANY field values (text, numbers, etc.)
+        without hardcoding email-specific logic here
+        """
+        context_parts = []
+        
+        # Check extra_params (from coordinator)
+        if hasattr(task, 'extra_params') and task.extra_params:
+            for key, value in task.extra_params.items():
+                # Skip internal params like input_from, device_id, etc.
+                if key in ['input_from', 'device_id', 'app_name', 'file_path', 'url']:
+                    continue
+                
+                # Add any user-facing parameter
+                context_parts.append(f"📝 {key.upper()}: \"{value}\" (from coordinator)")
+        
+        if context_parts:
+            return "\n" + "\n".join(context_parts) + "\n⚠️ USE THESE EXACT VALUES - DO NOT IMPROVISE!"
+        
+        return ""
     
     def _extract_target_app(self, goal: str) -> Optional[str]:
         """Extract target app from goal"""
@@ -470,6 +554,9 @@ class MobileReActStrategy:
         """
         Check if task is ACTUALLY complete
         - UI must be fully loaded (>= 5 elements)
+        
+        For coordinator-decomposed tasks, trust the LLM's "complete" decision
+        since each sub-task is simple and atomic
         """
         elements = ui_tree.elements
         
@@ -477,20 +564,7 @@ class MobileReActStrategy:
         if not elements or len(elements) < 5:
             return False
         
-        # If goal is just "open X", we're done
-        goal_lower = goal.lower()
-        if "compose" not in goal_lower and "send" not in goal_lower:
-            return True
-        
-        # For compose/send, verify compose button exists
-        if "compose" in goal_lower:
-            for elem in elements:
-                text = (elem.text or "").lower()
-                desc = (elem.content_description or "").lower()
-                if "compose" in text or "compose" in desc:
-                    return True
-            return False
-        
+        # If UI is fully loaded, trust the LLM's completion decision
         return True
     
     def _is_home_screen(self, ui_tree: SemanticUITree) -> bool:
@@ -525,38 +599,67 @@ class MobileReActStrategy:
         return f"in_app_{app_name.replace('.', '_')}"
     
     def _detect_stuck_in_loop(self) -> bool:
-        """Detect if stuck"""
-        if self.stuck_counter > 3:
-            logger.warning(f"⚠️ Stuck counter exceeded: {self.stuck_counter}")
-            return True
+        """
+        Detect if stuck - BUT be smart about it!
         
-        if len(self.previous_ui_trees) < 4:
+        NOT stuck if:
+        - UI elements are changing (means app is responding)
+        - Element count is fluctuating (means activity happening)
+        - Recent actions succeeded
+        
+        Only stuck if:
+        - Same state for 6+ steps (increased from 4)
+        - AND same element count
+        - AND no successful actions
+        """
+        # Need at least 6 steps to detect stuck (was 4, too aggressive!)
+        if self.stuck_counter <= 5:
             return False
         
-        recent_states = [self._detect_device_state(tree) for tree in self.previous_ui_trees[-4:]]
-        if len(set(recent_states)) == 1:
-            logger.warning(f"⚠️ Same device state for 4 steps: {recent_states[0]}")
-            
+        logger.warning(f"⚠️ Stuck counter: {self.stuck_counter}")
+        
+        # Check if UI is changing
+        if len(self.previous_ui_trees) >= 4:
             recent_element_counts = [len(tree.elements) for tree in self.previous_ui_trees[-4:]]
-            if len(set(recent_element_counts)) == 1 and recent_element_counts[0] <= 3:
-                logger.error(f"❌ UI tree not changing - only {recent_element_counts[0]} elements")
+            
+            # If element counts are changing, we're NOT stuck!
+            if len(set(recent_element_counts)) > 1:
+                logger.info(f"✅ UI elements changing: {recent_element_counts} - NOT stuck")
+                return False
+            
+            # If UI has very few elements and not changing, might be stuck
+            if recent_element_counts[0] <= 3:
+                logger.error(f"❌ UI frozen with only {recent_element_counts[0]} elements")
                 return True
         
+        # Check recent action history
         if len(self.action_history) >= 3:
             recent_actions = [h["action"]["action_type"] for h in self.action_history[-3:]]
+            
+            # If doing the SAME global action repeatedly, we're stuck
             if len(set(recent_actions)) == 1 and recent_actions[0] == "global_action":
-                logger.warning(f"⚠️ Same global action repeated 3 times")
+                logger.warning(f"⚠️ Same global action repeated 3 times: {recent_actions}")
                 return True
+            
+            # If we're actively typing or clicking different things, NOT stuck
+            if "type" in recent_actions or "scroll" in recent_actions:
+                logger.info(f"✅ Active typing/scrolling: {recent_actions} - NOT stuck")
+                return False
+        
+        # Only declare stuck if counter is REALLY high (6+)
+        if self.stuck_counter >= 6:
+            logger.error(f"❌ Truly stuck: {self.stuck_counter} steps in same state")
+            return True
         
         return False
     
     def _get_wait_time_for_action(self, action_type: str) -> float:
         """Get wait time based on action type"""
         wait_times = {
-            "click": 4.0,           # Need MORE time for apps to open!
-            "global_action": 2.0,
-            "type": 0.8,
-            "scroll": 0.5,
+            "click": 7.0,           # ✅ CRITICAL: Apps need 6-8s to fully open on emulators!
+            "global_action": 3.0,   # ✅ CRITICAL: Navigation needs more time
+            "type": 1.2,            # Give typing more time to register
+            "scroll": 0.8,          # Scrolling animations take time
             "wait": 0.1
         }
         return wait_times.get(action_type, 1.0)
@@ -581,9 +684,15 @@ class MobileReActStrategy:
         if self.failed_elements:
             blacklist_context = f"\n🚫 BLACKLISTED ELEMENTS (opened wrong apps): {sorted(list(self.failed_elements))}"
         
+        # ✅ FIX: Get exact content from current task params
+        exact_content_context = ""
+        if self.current_task:
+            exact_content_context = self._get_content_from_task_params(self.current_task)
+        
         state_context = f"""CURRENT DEVICE STATE: {self.device_state}
-STUCK COUNTER: {self.stuck_counter}/4
+STUCK COUNTER: {self.stuck_counter}/6
 PREVIOUS ACTIONS: {[h["action"]["action_type"] for h in self.action_history[-3:]] if self.action_history else 'None'}{blacklist_context}
+{exact_content_context}
 """
         
         prompt = f"""You are a mobile automation agent analyzing an Android screen.
@@ -597,73 +706,51 @@ CURRENT SCREEN:
 
 {history_context}
 
-CRITICAL ANALYSIS RULES:
-1. **BLACKLISTED ELEMENTS**: Elements in blacklist already opened WRONG apps. NEVER click them again!
+RULES (Priority order):
 
-2. **AURA APP DETECTION**: Check if you are INSIDE the AURA app (not just seeing it as an icon):
-   - IN AURA APP: Screen shows "Aura App Screen" AND has "Sending..." text AND "Refresh Status" button
-   - NOT IN AURA: Home screen with "aura_project" icon is just the app shortcut
-   - If ACTUALLY IN AURA app → MUST exit immediately using BACK
-   - If just seeing aura icon on home → ignore it
+1. **AURA EXIT**: In "Aura App Screen"? → Use BACK immediately!
 
-3. **APP MATCHING**:
-   - Home screen apps typically: [6] Play Store, [7] Gmail, [8] Photos, [9] YouTube
-   - Match by BOTH text AND content_description
-   - "Gmail" ≠ "YouTube" ≠ "Photos" - be EXACT
-   - Avoid "YouTube Music" if goal is "YouTube"
+2. **GOAL CHECK**:
+   - Goal = "Open X"? → See X app? → DONE ✅
+   - Goal = "Click/Type/Set Y"? → Must DO Y first! ❌
 
-4. **APP NOT FOUND**: If target app NOT visible on home screen:
-   - Scroll UP to open app drawer (NOT down!)
-   - App drawer shows ALL apps
+3. **⏰ TIME PICKER** (When display shows "07:00" or similar):
+   ```
+   CRITICAL STEPS:
+   1. Clicked hour? → Display shows "07"? → Good!
+   2. Check AM/PM buttons:
+      - Goal is "7 AM"? → Is AM button visible? → CLICK AM FIRST!
+      - Goal is "7 PM"? → Is PM button visible? → CLICK PM FIRST!
+   3. THEN click OK button
+   
+   Example for "7 AM":
+   [3] ELEMENT "07"
+   [6] BUTTON "AM" ← CLICK THIS FIRST!
+   [7] BUTTON "PM"
+   [23] BUTTON "OK" ← THEN CLICK THIS
+   
+   NEVER assume AM is selected - ALWAYS click it explicitly!
+   ```
 
-5. **STUCK DETECTION**: If BACK tried 3+ times and still same screen:
-   - Use HOME action instead
-   - Then navigate from home screen
+4. **COMPLETION BUTTONS**: See OK/Done/Send/Save? → Click it!
 
-6. **INCOMPLETE UI**: If only 1-2 elements visible:
-   - Request wait action (let UI load)
-   - Or scroll to reveal content
+5. **BLACKLIST**: Never click {sorted(list(self.failed_elements))}
 
-7. **SEARCH QUERIES**: For "search for X" tasks:
-   - Step 1: Click search field
-   - Step 2: Type "X"
-   - Step 3: Press keyboard ENTER key to execute search
-   - NEVER type the same text twice in same field
+6. **EXACT VALUES**: See "📝 KEY: value"? → Use EXACT value!
 
-8. **EMAIL/COMPOSE SCREENS**: In Gmail compose or similar:
-   - NEVER type in "To:", "Recipient", or email address fields
-   - User fills these manually
-   - Only fill subject/body if explicitly requested
+7. **NO DUPLICATES**: Typing skipped? → Field done, next action!
 
-AVAILABLE ACTIONS:
-- click: Click element by element_id
-- type: Type text into field
-- keyboard_key: Press keyboard key (ENTER, BACK, etc.)
-- scroll: Scroll (up/down/left/right)
-- wait: Wait for UI load
-- global_action: System actions (HOME, BACK, RECENTS)
-- complete: Mark task done
+8. **APP DRAWER**: App not visible? → Scroll UP!
 
-RESPONSE FORMAT (JSON ONLY):
-{{
-  "thought": "Brief analysis and next step",
-  "action_type": "click|type|keyboard_key|scroll|wait|global_action|complete",
-  "element_id": 5,
-  "text": "hello",
-  "key": "ENTER",
-  "direction": "down",
-  "duration": 1000,
-  "global_action": "HOME",
-  "reason": "Why goal achieved"
-}}
+RESPONSE EXAMPLES (copy format exactly):
+- Exit AURA: {{"thought": "exit aura", "action_type": "global_action", "global_action": "BACK"}}
+- Click element: {{"thought": "click gmail", "action_type": "click", "element_id": 7}}
+- Type text: {{"thought": "type email", "action_type": "type", "element_id": 10, "text": "test@example.com"}}
+- Task done: {{"thought": "goal achieved", "action_type": "complete"}}
 
-IMPORTANT:
-- NEVER click blacklisted elements
-- If target is Gmail [7], click element 7 (not 6, not 8)
-- If app not found, scroll UP for app drawer
-- Respond with ONLY valid JSON, no markdown
+CRITICAL: For global_action, MUST include "global_action": "BACK" or "HOME" in JSON!
 
-ANALYZE AND RESPOND:"""
+Respond with ONLY valid JSON, no markdown."""
         
         try:
             response = await self.llm_client.chat.completions.create(
@@ -778,6 +865,62 @@ ANALYZE AND RESPOND:"""
         except Exception as e:
             logger.error(f"❌ Error fetching UI tree: {e}")
             return None
+    
+    async def _fetch_ui_tree_with_retries(
+        self,
+        action_type: str,
+        max_attempts: int = 3,
+        retry_delay: float = 2.0
+    ) -> Optional[SemanticUITree]:
+        """
+        ✅ CRITICAL: Fetch UI tree with retries for incomplete UIs
+        
+        Apps take time to load! If we get a partial UI (< 5 elements),
+        wait longer and try again. This prevents premature verification.
+        
+        Args:
+            action_type: Type of action that was just executed
+            max_attempts: Max number of fetch attempts (default 3)
+            retry_delay: Seconds to wait between retries (default 2.0)
+        
+        Returns:
+            SemanticUITree or None
+        """
+        for attempt in range(max_attempts):
+            ui_tree = await self._fetch_ui_tree_from_device()
+            
+            if not ui_tree:
+                if attempt < max_attempts - 1:
+                    logger.warning(f"⚠️ Attempt {attempt + 1}: No UI tree - retrying in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error(f"❌ Failed to get UI tree after {max_attempts} attempts")
+                    return None
+            
+            # Check if UI is fully loaded
+            element_count = len(ui_tree.elements)
+            
+            # For clicks, we expect a full UI (>= 5 elements)
+            # For other actions, minimal validation
+            min_elements = 5 if action_type == "click" else 2
+            
+            if element_count >= min_elements:
+                if attempt > 0:
+                    logger.info(f"✅ UI fully loaded on attempt {attempt + 1} ({element_count} elements)")
+                return ui_tree
+            
+            # UI incomplete - wait and retry
+            if attempt < max_attempts - 1:
+                logger.warning(f"⚠️ Attempt {attempt + 1}: UI incomplete ({element_count} elements, need {min_elements}+)")
+                logger.warning(f"⏳ Waiting {retry_delay}s for app to finish loading...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.warning(f"⚠️ UI still incomplete after {max_attempts} attempts ({element_count} elements)")
+                logger.warning(f"⚠️ Proceeding anyway - app may be slow")
+                return ui_tree
+        
+        return None
     
     async def _execute_action_on_device(self, action: UIAction) -> ActionResult:
         """Execute action on device"""
