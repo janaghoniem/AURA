@@ -1,13 +1,14 @@
 # ============================================================================
-# WEB CODE EXECUTION - RAG + PLAYWRIGHT INTEGRATION (ENHANCED)
+# WEB CODE EXECUTION - ULTIMATE INTEGRATED VERSION
 # ============================================================================
-# ✅ ISSUE 1: Advanced bot detection bypass
-# ✅ ISSUE 3: Persistent page context (NO CONFLICT with mem0 - uses separate cache)
-# ✅ NEW: Page State Layer before actions
-# ✅ NEW: Keyboard shortcuts for media control
-# ✅ NEW: Post-action verification
-# ✅ NEW: Smart intent handling when elements not listed
-# ✅ NEW: State-dependent command handling
+# ✅ GENERIC MULTI-PLATFORM (YouTube, Amazon, Netflix, Google, ANY SITE)
+# ✅ Advanced bot detection bypass
+# ✅ Persistent page context (separate from mem0)
+# ✅ Page State Layer before actions
+# ✅ Platform-specific keyboard shortcuts
+# ✅ Post-action verification
+# ✅ Smart intent handling when elements not listed
+# ✅ State-dependent command handling
 
 import asyncio
 import logging
@@ -48,9 +49,9 @@ class WebExecutionConfig:
     enable_verification: bool = True
     enable_page_context: bool = True
     
-    # ✅ NEW: Page state layer configuration
-    enable_page_state_layer: bool = True  # Observe before acting
-    enable_smart_intent: bool = True      # Handle missing elements intelligently
+    # ✅ Page state layer configuration
+    enable_page_state_layer: bool = True
+    enable_smart_intent: bool = True
     
     # Context caching (separate from mem0 - this is tab-level DOM cache)
     cache_page_context: bool = True
@@ -76,253 +77,218 @@ class WebExecutionResult:
     screenshot_path: Optional[str] = None
     execution_time: float = 0.0
     verification_message: Optional[str] = None
-    page_state_before: Optional[Dict] = None  # ✅ NEW
-    page_state_after: Optional[Dict] = None   # ✅ NEW
+    page_state_before: Optional[Dict] = None
+    page_state_after: Optional[Dict] = None
 
 # ============================================================================
-# ✅ NEW: PAGE STATE OBSERVER
+# ✅ GENERIC SITE DETECTOR - WORKS FOR ALL WEBSITES
 # ============================================================================
 
-class PageStateObserver:
-    """
-    Observes page state before actions to prevent wrong-context execution.
-    Separate from mem0 - this is real-time page state, not conversation memory.
-    """
+class SiteDetector:
+    """Detect website type and capabilities - GENERIC"""
     
     @staticmethod
-    async def observe_page_state(page) -> Dict[str, Any]:
+    async def detect_site_type(page) -> Dict:
         """
-        Observe current page state comprehensively.
-        Returns dictionary with all relevant state information.
+        Detect what type of site we're on.
+        
+        Returns:
+            {
+                'site_type': 'video' | 'ecommerce' | 'social' | 'search' | 'generic',
+                'platform': 'youtube' | 'amazon' | 'ebay' | 'google' | 'unknown',
+                'capabilities': ['video_player', 'search', 'shopping_cart', ...]
+            }
         """
         
-        logger.info("👁️ Observing page state...")
+        url = page.url.lower()
         
+        # Detect platform
+        platform = 'unknown'
+        if 'youtube.com' in url or 'youtu.be' in url:
+            platform = 'youtube'
+        elif 'amazon.' in url:
+            platform = 'amazon'
+        elif 'ebay.' in url:
+            platform = 'ebay'
+        elif 'google.com' in url or 'google.' in url:
+            platform = 'google'
+        elif 'facebook.com' in url or 'fb.com' in url:
+            platform = 'facebook'
+        elif 'twitter.com' in url or 'x.com' in url:
+            platform = 'twitter'
+        elif 'netflix.com' in url:
+            platform = 'netflix'
+        elif 'instagram.com' in url:
+            platform = 'instagram'
+        elif 'linkedin.com' in url:
+            platform = 'linkedin'
+        
+        # Detect site type based on content
         try:
-            state = await page.evaluate("""
+            site_info = await page.evaluate("""
                 () => {
-                    const state = {
-                        url: window.location.href,
-                        title: document.title,
-                        readyState: document.readyState,
-                        
-                        // Video state
-                        video: null,
-                        
-                        // Page type detection
-                        isYouTube: window.location.hostname.includes('youtube.com'),
-                        isPlaylist: false,
-                        
-                        // Interactive elements
-                        hasInputs: document.querySelectorAll('input, textarea').length > 0,
-                        hasButtons: document.querySelectorAll('button').length > 0,
-                        
-                        // Focus state
-                        activeElement: document.activeElement?.tagName,
-                        
-                        // Viewport
-                        scrollPosition: window.scrollY,
-                        viewportHeight: window.innerHeight,
+                    const hasVideo = !!document.querySelector('video');
+                    const hasAudio = !!document.querySelector('audio');
+                    const hasSearch = !!document.querySelector('[type="search"], [role="search"], input[placeholder*="search" i]');
+                    const hasCart = !!document.querySelector('[data-testid*="cart" i], [aria-label*="cart" i], .cart, #cart, [id*="cart" i]');
+                    const hasPrices = !!document.querySelector('[data-price], .price, [class*="price" i], [aria-label*="price" i]');
+                    const hasProducts = !!document.querySelector('[data-product], [class*="product" i], [data-testid*="product" i]');
+                    
+                    return {
+                        hasVideo,
+                        hasAudio,
+                        hasSearch,
+                        hasCart,
+                        hasPrices,
+                        hasProducts
                     };
-                    
-                    // Check for video element
-                    const video = document.querySelector('video');
-                    if (video) {
-                        state.video = {
-                            exists: true,
-                            src: video.src || video.currentSrc,
-                            paused: video.paused,
-                            muted: video.muted,
-                            volume: video.volume,
-                            currentTime: video.currentTime,
-                            duration: video.duration,
-                            playing: !video.paused && video.currentTime > 0,
-                            ended: video.ended,
-                            readyState: video.readyState,
-                            networkState: video.networkState,
-                        };
-                    }
-                    
-                    // YouTube-specific detection
-                    if (state.isYouTube) {
-                        // Check if playlist
-                        state.isPlaylist = !!document.querySelector('[aria-label*="playlist" i], #playlist');
-                        
-                        // Check if player is focused
-                        const player = document.querySelector('#movie_player, .html5-video-player');
-                        state.playerFocused = player && player.contains(document.activeElement);
-                        
-                        // Check controls visibility
-                        state.controlsVisible = !!document.querySelector('.ytp-chrome-bottom:not(.ytp-autohide)');
-                    }
-                    
-                    return state;
                 }
             """)
-            
-            logger.info(f"✅ Page state observed: video={state.get('video', {}).get('exists', False)}, "
-                       f"YouTube={state.get('isYouTube', False)}, "
-                       f"playlist={state.get('isPlaylist', False)}")
-            
-            return state
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to observe page state: {e}")
-            return {
-                'error': str(e),
-                'url': page.url if page else 'unknown'
+        except:
+            site_info = {
+                'hasVideo': False,
+                'hasAudio': False,
+                'hasSearch': False,
+                'hasCart': False,
+                'hasPrices': False,
+                'hasProducts': False
             }
-    
-    @staticmethod
-    def validate_action_context(page_state: Dict, action_type: str, ai_prompt: str) -> Tuple[bool, str]:
-        """
-        Validate if action can be performed in current page context.
-        Returns (can_proceed, reason/suggestion)
-        """
         
-        # Media control actions
-        media_actions = ['pause', 'play', 'mute', 'unmute', 'skip', 'next', 'previous']
+        # Determine site type
+        site_type = 'generic'
+        capabilities = []
         
-        if any(action in ai_prompt.lower() for action in media_actions):
-            video_state = page_state.get('video')
-            
-            if not video_state or not video_state.get('exists'):
-                return False, "No video element found on page. Cannot perform media control."
-            
-            # Check specific media action requirements
-            if 'pause' in ai_prompt.lower():
-                if video_state.get('paused'):
-                    return False, "Video is already paused. No action needed."
-            
-            elif 'play' in ai_prompt.lower():
-                if video_state.get('playing'):
-                    return False, "Video is already playing. No action needed."
-            
-            elif 'mute' in ai_prompt.lower():
-                if video_state.get('muted'):
-                    return False, "Video is already muted. No action needed."
-            
-            elif 'unmute' in ai_prompt.lower():
-                if not video_state.get('muted'):
-                    return False, "Video is already unmuted. No action needed."
-            
-            elif any(word in ai_prompt.lower() for word in ['skip', 'next']):
-                if not page_state.get('isPlaylist'):
-                    return False, "No playlist detected. 'Skip/Next' only works in playlists. Consider seeking within video instead."
+        if site_info['hasVideo'] or site_info['hasAudio']:
+            site_type = 'video'
+            capabilities.append('media_player')
         
-        return True, "Context validated - can proceed"
-    
-    @staticmethod
-    async def compare_states(before: Dict, after: Dict) -> Dict[str, Any]:
-        """
-        Compare page states before and after action.
-        Returns dictionary describing changes.
-        """
+        if site_info['hasSearch']:
+            capabilities.append('search')
         
-        changes = {
-            'url_changed': before.get('url') != after.get('url'),
-            'video_state_changed': False,
-            'focus_changed': before.get('activeElement') != after.get('activeElement'),
-            'scroll_changed': before.get('scrollPosition') != after.get('scrollPosition'),
+        if site_info['hasCart'] or site_info['hasPrices'] or site_info['hasProducts']:
+            if site_type == 'generic':
+                site_type = 'ecommerce'
+            capabilities.append('shopping')
+        
+        return {
+            'site_type': site_type,
+            'platform': platform,
+            'capabilities': capabilities,
+            'url': page.url
         }
-        
-        # Check video state changes
-        video_before = before.get('video', {})
-        video_after = after.get('video', {})
-        
-        if video_before.get('exists') and video_after.get('exists'):
-            changes['video_state_changed'] = (
-                video_before.get('paused') != video_after.get('paused') or
-                video_before.get('muted') != video_after.get('muted') or
-                abs(video_before.get('currentTime', 0) - video_after.get('currentTime', 0)) > 0.1
-            )
-            
-            # Detailed video changes
-            changes['video_details'] = {
-                'paused_changed': video_before.get('paused') != video_after.get('paused'),
-                'muted_changed': video_before.get('muted') != video_after.get('muted'),
-                'time_changed': abs(video_before.get('currentTime', 0) - video_after.get('currentTime', 0)) > 0.1,
-            }
-        
-        changes['any_change'] = any([
-            changes['url_changed'],
-            changes['video_state_changed'],
-            changes['focus_changed'],
-        ])
-        
-        return changes
 
 # ============================================================================
-# ✅ NEW: MEDIA KEYBOARD SHORTCUTS HANDLER
+# ✅ GENERIC KEYBOARD SHORTCUTS - PLATFORM-SPECIFIC + EXTENSIBLE
 # ============================================================================
 
-class MediaKeyboardShortcuts:
-    """
-    Handles media control via keyboard shortcuts (especially for YouTube).
-    More reliable than clicking UI elements.
-    """
+class KeyboardShortcuts:
+    """Platform-specific keyboard shortcuts - COMPREHENSIVE"""
     
-    # YouTube keyboard shortcuts mapping
-    YOUTUBE_SHORTCUTS = {
-        'play': 'k',
-        'pause': 'k',
-        'mute': 'm',
-        'unmute': 'm',
-        'next': 'Shift+N',
-        'previous': 'Shift+P',
-        'skip': 'Shift+N',
-        'fullscreen': 'f',
-        'theater': 't',
-        'miniplayer': 'i',
-        'captions': 'c',
-        'increase_speed': 'Shift+>',
-        'decrease_speed': 'Shift+<',
+    SHORTCUTS = {
+        'youtube': {
+            'pause': 'k',
+            'play': 'k',
+            'mute': 'm',
+            'unmute': 'm',
+            'next': 'Shift+N',
+            'previous': 'Shift+P',
+            'skip': 'Shift+N',
+            'fullscreen': 'f',
+            'theater': 't',
+            'miniplayer': 'i',
+            'captions': 'c',
+            'speed_up': 'Shift+>',
+            'speed_down': 'Shift+<',
+            'skip_forward': 'l',
+            'skip_backward': 'j',
+        },
+        'netflix': {
+            'pause': 'Space',
+            'play': 'Space',
+            'fullscreen': 'f',
+            'rewind': 'ArrowLeft',
+            'forward': 'ArrowRight',
+            'mute': 'm',
+            'volume_up': 'ArrowUp',
+            'volume_down': 'ArrowDown'
+        },
+        'amazon': {
+            'search': '/',
+            'cart': 'c'
+        },
+        'google': {
+            'search': '/',
+            'next_result': 'j',
+            'previous_result': 'k'
+        },
+        'facebook': {
+            'search': '/',
+            'home': 'h'
+        },
+        'twitter': {
+            'search': '/',
+            'home': 'h',
+            'new_tweet': 'n'
+        },
+        # Generic fallback for unknown video sites
+        'generic_video': {
+            'pause': 'Space',
+            'play': 'Space',
+            'fullscreen': 'f',
+            'mute': 'm'
+        }
     }
     
     @staticmethod
-    async def execute_media_shortcut(page, action: str) -> Dict[str, Any]:
-        """
-        Execute media control using keyboard shortcut.
-        Returns result with success status.
-        """
+    def get_shortcut(platform: str, action: str) -> Optional[str]:
+        """Get keyboard shortcut for action on platform"""
         
-        action_lower = action.lower()
+        # Try platform-specific first
+        if platform in KeyboardShortcuts.SHORTCUTS:
+            shortcuts = KeyboardShortcuts.SHORTCUTS[platform]
+            if action in shortcuts:
+                return shortcuts[action]
         
-        # Find matching shortcut
-        shortcut = None
-        for key, value in MediaKeyboardShortcuts.YOUTUBE_SHORTCUTS.items():
-            if key in action_lower:
-                shortcut = value
-                break
+        # Fall back to generic video shortcuts
+        if action in KeyboardShortcuts.SHORTCUTS.get('generic_video', {}):
+            return KeyboardShortcuts.SHORTCUTS['generic_video'][action]
+        
+        return None
+    
+    @staticmethod
+    async def execute_shortcut(page, platform: str, action: str) -> Dict[str, Any]:
+        """Execute keyboard shortcut if available"""
+        
+        shortcut = KeyboardShortcuts.get_shortcut(platform, action)
         
         if not shortcut:
-            return {
-                'success': False,
-                'error': f"No keyboard shortcut mapped for action: {action}"
-            }
+            logger.debug(f"⚠️ No shortcut for '{action}' on {platform}")
+            return {'success': False, 'error': f"No shortcut for {action}"}
         
-        logger.info(f"⌨️ Executing keyboard shortcut: {shortcut} for action: {action}")
+        logger.info(f"⌨️ Executing shortcut: {shortcut} for {action} on {platform}")
         
         try:
-            # Focus the video player first
+            # Focus player first (generic - works on any site)
             await page.evaluate("""
                 () => {
                     const video = document.querySelector('video');
-                    if (video) {
-                        video.focus();
-                    } else {
-                        // Try to focus player container
-                        const player = document.querySelector('#movie_player, .html5-video-player');
-                        if (player) player.focus();
+                    const audio = document.querySelector('audio');
+                    const media = video || audio;
+                    
+                    if (media) {
+                        media.focus();
+                        const player = media.closest('[role="presentation"], [id*="player"], [class*="player"]');
+                        if (player && player.tabIndex >= 0) {
+                            player.focus();
+                        }
                     }
                 }
             """)
             
             await page.wait_for_timeout(100)
             
-            # Press the shortcut
+            # Execute shortcut
             if '+' in shortcut:
-                # Handle modifier keys (e.g., Shift+N)
                 parts = shortcut.split('+')
                 modifier = parts[0]
                 key = parts[1]
@@ -335,20 +301,338 @@ class MediaKeyboardShortcuts:
             
             await page.wait_for_timeout(300)
             
-            logger.info(f"✅ Keyboard shortcut executed: {shortcut}")
-            
-            return {
-                'success': True,
-                'shortcut': shortcut,
-                'action': action
-            }
+            logger.info(f"✅ Shortcut executed: {shortcut}")
+            return {'success': True, 'shortcut': shortcut, 'action': action}
             
         except Exception as e:
-            logger.error(f"❌ Failed to execute keyboard shortcut: {e}")
-            return {
-                'success': False,
-                'error': str(e)
+            logger.error(f"❌ Shortcut execution failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+# ============================================================================
+# ✅ GENERIC PAGE STATE OBSERVER - WORKS FOR ALL WEBSITES
+# ============================================================================
+
+async def observe_page_state(page) -> Dict[str, Any]:
+    """
+    ✅ GENERIC page state observation - works for ANY website.
+    Replaces YouTube-only observation.
+    """
+    
+    logger.info("👁️ Observing page state (generic)...")
+    
+    try:
+        # Detect site type first
+        site_info = await SiteDetector.detect_site_type(page)
+        
+        # Get comprehensive state
+        state = await page.evaluate("""
+            () => {
+                const state = {
+                    url: window.location.href,
+                    title: document.title,
+                    readyState: document.readyState,
+                    scrollPosition: window.scrollY,
+                    viewportHeight: window.innerHeight,
+                    viewportWidth: window.innerWidth,
+                    activeElement: document.activeElement?.tagName || 'BODY',
+                    
+                    // Video state (any site)
+                    video: null,
+                    
+                    // Audio state (any site)
+                    audio: null,
+                    
+                    // Interactive elements (any site)
+                    interactive: {
+                        hasButtons: document.querySelectorAll('button, [role="button"]').length > 0,
+                        hasInputs: document.querySelectorAll('input, textarea, select').length > 0,
+                        hasLinks: document.querySelectorAll('a[href]').length > 0,
+                        hasModals: document.querySelectorAll('[role="dialog"], .modal, [class*="modal"]').length > 0,
+                    },
+                    
+                    // Shopping features (ecommerce sites)
+                    shopping: {
+                        hasCart: !!document.querySelector('[data-testid*="cart" i], [aria-label*="cart" i], #cart'),
+                        hasPrices: document.querySelectorAll('[data-price], .price, [class*="price"]').length > 0,
+                        hasProducts: document.querySelectorAll('[data-product], [class*="product"]').length > 0,
+                    },
+                    
+                    // Search features (any site)
+                    search: {
+                        hasSearchBox: !!document.querySelector('[type="search"], [role="search"], input[placeholder*="search" i]'),
+                        searchFocused: document.activeElement?.type === 'search',
+                    }
+                };
+                
+                // Check for video element
+                const video = document.querySelector('video');
+                if (video) {
+                    state.video = {
+                        exists: true,
+                        src: video.src || video.currentSrc,
+                        paused: video.paused,
+                        muted: video.muted,
+                        volume: video.volume,
+                        currentTime: video.currentTime,
+                        duration: video.duration,
+                        playing: !video.paused && video.currentTime > 0,
+                        ended: video.ended,
+                        readyState: video.readyState,
+                        networkState: video.networkState,
+                    };
+                }
+                
+                // Check for audio element
+                const audio = document.querySelector('audio');
+                if (audio) {
+                    state.audio = {
+                        exists: true,
+                        src: audio.src || audio.currentSrc,
+                        paused: audio.paused,
+                        muted: audio.muted,
+                        volume: audio.volume,
+                        currentTime: audio.currentTime,
+                        duration: audio.duration,
+                        playing: !audio.paused && audio.currentTime > 0,
+                    };
+                }
+                
+                return state;
             }
+        """)
+        
+        # Add detected site info
+        state['siteInfo'] = site_info
+        state['platform'] = site_info['platform']
+        state['siteType'] = site_info['site_type']
+        state['capabilities'] = site_info['capabilities']
+        
+        # Platform-specific detection (for backward compatibility)
+        state['isYouTube'] = site_info['platform'] == 'youtube'
+        state['isPlaylist'] = False
+        
+        if state['isYouTube']:
+            # YouTube-specific checks
+            playlist_check = await page.evaluate("""
+                () => !!document.querySelector('[aria-label*="playlist" i], #playlist, .playlist')
+            """)
+            state['isPlaylist'] = playlist_check
+        
+        logger.info(f"✅ Page state: platform={state['platform']}, type={state['siteType']}, "
+                   f"video={state.get('video', {}).get('exists', False)}, "
+                   f"capabilities={state['capabilities']}")
+        
+        return state
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to observe page state: {e}")
+        return {
+            'error': str(e),
+            'url': page.url if page else 'unknown',
+            'platform': 'unknown',
+            'siteType': 'generic',
+            'capabilities': []
+        }
+
+
+def validate_action_context(page_state: Dict, action_type: str, ai_prompt: str) -> Tuple[bool, str]:
+    """
+    ✅ GENERIC context validation - works for any site.
+    Validate if action can be performed in current page context.
+    """
+    
+    # Media control actions
+    media_actions = ['pause', 'play', 'mute', 'unmute', 'skip', 'next', 'previous', 'forward', 'rewind']
+    
+    if any(action in ai_prompt.lower() for action in media_actions):
+        video_state = page_state.get('video')
+        audio_state = page_state.get('audio')
+        
+        # Check if media exists
+        if not ((video_state and video_state.get('exists')) or (audio_state and audio_state.get('exists'))):
+            return False, "No media element found on page. Cannot perform media control."
+        
+        # Check specific media action requirements
+        if 'pause' in ai_prompt.lower():
+            if video_state and video_state.get('paused'):
+                return False, "Media is already paused. No action needed."
+        
+        elif 'play' in ai_prompt.lower():
+            if video_state and video_state.get('playing'):
+                return False, "Media is already playing. No action needed."
+        
+        elif 'mute' in ai_prompt.lower():
+            if video_state and video_state.get('muted'):
+                return False, "Media is already muted. No action needed."
+        
+        elif 'unmute' in ai_prompt.lower():
+            if video_state and not video_state.get('muted'):
+                return False, "Media is already unmuted. No action needed."
+        
+        elif any(word in ai_prompt.lower() for word in ['skip', 'next']):
+            # Only warn for YouTube playlists
+            if page_state.get('isYouTube') and not page_state.get('isPlaylist'):
+                return False, "No playlist detected. 'Skip/Next' only works in playlists on YouTube."
+    
+    return True, "Context validated - can proceed"
+
+
+async def compare_states(before: Dict, after: Dict) -> Dict[str, Any]:
+    """
+    ✅ GENERIC state comparison - works for any site.
+    Compare page states before and after action.
+    """
+    
+    changes = {
+        'url_changed': before.get('url') != after.get('url'),
+        'media_state_changed': False,
+        'focus_changed': before.get('activeElement') != after.get('activeElement'),
+        'scroll_changed': before.get('scrollPosition') != after.get('scrollPosition'),
+    }
+    
+    # Check video state changes
+    video_before = before.get('video', {})
+    video_after = after.get('video', {})
+    
+    if video_before.get('exists') and video_after.get('exists'):
+        changes['media_state_changed'] = (
+            video_before.get('paused') != video_after.get('paused') or
+            video_before.get('muted') != video_after.get('muted') or
+            abs(video_before.get('currentTime', 0) - video_after.get('currentTime', 0)) > 0.1
+        )
+        
+        changes['media_details'] = {
+            'paused_changed': video_before.get('paused') != video_after.get('paused'),
+            'muted_changed': video_before.get('muted') != video_after.get('muted'),
+            'time_changed': abs(video_before.get('currentTime', 0) - video_after.get('currentTime', 0)) > 0.1,
+        }
+    
+    # Check audio state changes
+    audio_before = before.get('audio', {})
+    audio_after = after.get('audio', {})
+    
+    if audio_before.get('exists') and audio_after.get('exists'):
+        if not changes['media_state_changed']:  # Only check if video didn't change
+            changes['media_state_changed'] = (
+                audio_before.get('paused') != audio_after.get('paused') or
+                audio_before.get('muted') != audio_after.get('muted')
+            )
+    
+    changes['any_change'] = any([
+        changes['url_changed'],
+        changes['media_state_changed'],
+        changes['focus_changed'],
+    ])
+    
+    return changes
+
+
+def build_smart_intent_prompt(page_state: Dict, ai_prompt: str, page_context: Dict) -> str:
+    """
+    ✅ ENHANCED: Build smart intent prompt based on detected site type.
+    Dynamically adjusts based on platform.
+    """
+    
+    platform = page_state.get('platform', 'unknown')
+    site_type = page_state.get('siteType', 'generic')
+    capabilities = page_state.get('capabilities', [])
+    
+    # Get platform-specific shortcuts
+    available_shortcuts = []
+    if platform in KeyboardShortcuts.SHORTCUTS:
+        for action, shortcut in KeyboardShortcuts.SHORTCUTS[platform].items():
+            available_shortcuts.append(f"  - {action}: '{shortcut}'")
+    
+    shortcuts_section = ""
+    if available_shortcuts:
+        shortcuts_section = f"""
+================================================================
+KEYBOARD SHORTCUTS FOR {platform.upper()}:
+================================================================
+{chr(10).join(available_shortcuts)}
+
+USE THESE SHORTCUTS when UI elements are missing or unreliable!
+"""
+    
+    # Build smart intent rules based on site type
+    smart_intent_rules = ""
+    
+    if 'media_player' in capabilities:
+        smart_intent_rules += """
+2a) **Media Controls (Video/Audio sites)**:
+   - Prefer keyboard shortcuts over clicking UI buttons
+   - Example: For "pause" → press appropriate key (check shortcuts above)
+   - Fallback: Use page.evaluate() to directly control media element
+   - Example: `await page.evaluate('() => document.querySelector("video").pause()')`
+"""
+    
+    if 'shopping' in capabilities:
+        smart_intent_rules += """
+2b) **Shopping Features (E-commerce sites)**:
+   - Look for cart icons, price elements, product listings
+   - Use data attributes: [data-testid*="cart"], [data-price]
+   - Fallback to aria-labels and class names
+"""
+    
+    if 'search' in capabilities:
+        smart_intent_rules += """
+2c) **Search Features**:
+   - Try [type="search"], [role="search"], input[placeholder*="search"]
+   - Use keyboard shortcut '/' on supported sites
+"""
+    
+    if not smart_intent_rules:
+        smart_intent_rules = """
+2d) **Generic Site Strategy**:
+   - Try multiple selector strategies (id, class, aria-label, data attributes)
+   - Use page.evaluate() for direct DOM manipulation
+   - Look for semantic HTML elements (button, input, a, etc.)
+"""
+    
+    enhanced_prompt = f"""
+# CURRENT PAGE STATE
+URL: {page_context.get('url', 'unknown')}
+Title: {page_context.get('title', 'unknown')}
+Platform: {platform}
+Site Type: {site_type}
+Capabilities: {', '.join(capabilities) if capabilities else 'none detected'}
+
+# PAGE STATE INFORMATION
+{json.dumps(page_state, indent=2)}
+
+# AVAILABLE INTERACTIVE ELEMENTS
+{page_context.get('semantics', 'unavailable')}
+
+# USER TASK
+{ai_prompt}
+
+================================================================
+ENHANCED RULES WITH SMART INTENT HANDLING:
+================================================================
+
+1. **Primary Approach**: Use ONLY elements that exist in the list above
+
+2. **Smart Intent for Missing Elements**: 
+{smart_intent_rules}
+
+3. **Success Criteria**:
+   - Print 'EXECUTION_SUCCESS' ONLY when the intended outcome is achieved
+   - Verify state change when possible
+   - For media controls: check element state after action
+
+4. **Failure Handling**:
+   - If element truly doesn't exist and no alternative works:
+     Print 'FAILED: [specific reason]' with what you tried
+
+{shortcuts_section}
+
+================================================================
+
+Generate code that intelligently handles the task even if exact UI elements are not listed.
+Use platform-specific shortcuts when available.
+"""
+    
+    return enhanced_prompt
 
 # ============================================================================
 # ✅ PERSISTENT PAGE CONTEXT CACHE (SEPARATE FROM MEM0)
@@ -362,7 +646,7 @@ class PageContextCache:
     """
     
     def __init__(self, ttl_seconds: int = 30):
-        self.cache: Dict[str, Dict] = {}  # session_id -> context data
+        self.cache: Dict[str, Dict] = {}
         self.ttl = ttl_seconds
         self.last_analysis: Dict[str, float] = {}
     
@@ -409,6 +693,14 @@ class PageContextCache:
         if session_id in self.cache:
             del self.cache[session_id]
             logger.info(f"🗑️ Invalidated DOM cache for session {session_id}")
+    
+    def cleanup_closed_sessions(self, active_sessions: List[str]):
+        """Remove cache for closed sessions"""
+        sessions_to_remove = [s for s in self.cache.keys() if s not in active_sessions]
+        for session_id in sessions_to_remove:
+            del self.cache[session_id]
+            if session_id in self.last_analysis:
+                del self.last_analysis[session_id]
 
 # ============================================================================
 # ✅ ADVANCED STEALTH BROWSER
@@ -525,8 +817,9 @@ class StealthBrowser:
 class WebExecutionPipeline:
     """
     Enhanced pipeline with:
+    - GENERIC multi-platform support
     - Page state layer (observe before acting)
-    - Keyboard shortcuts for media
+    - Platform-specific keyboard shortcuts
     - Post-action verification
     - Smart intent handling
     - Persistent context (separate from mem0)
@@ -541,11 +834,9 @@ class WebExecutionPipeline:
         self._rag_system = None
         self.shared_groq_client = None
         
-        # ✅ NEW: Helper classes
+        # ✅ Helper classes
         self.context_cache = PageContextCache(ttl_seconds=config.context_cache_ttl)
         self.stealth = StealthBrowser()
-        self.state_observer = PageStateObserver()
-        self.media_shortcuts = MediaKeyboardShortcuts()
         
         Path(self.config.screenshot_dir).mkdir(parents=True, exist_ok=True)
     
@@ -641,12 +932,13 @@ class WebExecutionPipeline:
         session_id: str = "default"
     ) -> WebExecutionResult:
         """
-        Execute web task with FULL enhancements:
-        1. Page state observation
-        2. Context validation
-        3. Smart intent handling
-        4. Keyboard shortcuts for media
-        5. Post-action verification
+        Execute web task with FULL enhancements + GENERIC platform support:
+        1. Site detection (YouTube, Amazon, Netflix, Google, ANY site)
+        2. Page state observation
+        3. Context validation
+        4. Platform-specific keyboard shortcuts
+        5. Smart intent handling
+        6. Post-action verification
         """
         
         start_time = datetime.now()
@@ -667,14 +959,14 @@ class WebExecutionPipeline:
                     execution_time=(datetime.now() - start_time).total_seconds()
                 )
             
-            # ✅ STEP 1: OBSERVE PAGE STATE BEFORE ACTION
+            # ✅ STEP 1: OBSERVE PAGE STATE BEFORE ACTION (GENERIC)
             page_state_before = None
             if self.config.enable_page_state_layer:
-                page_state_before = await self.state_observer.observe_page_state(page)
+                page_state_before = await observe_page_state(page)
                 
                 # Validate action context
                 action_type = task.get('web_params', {}).get('action', 'unknown')
-                can_proceed, reason = self.state_observer.validate_action_context(
+                can_proceed, reason = validate_action_context(
                     page_state_before, action_type, ai_prompt
                 )
                 
@@ -694,45 +986,55 @@ class WebExecutionPipeline:
             if action_type == 'navigate':
                 self.context_cache.invalidate(session_id)
             
-            # ✅ STEP 2: CHECK FOR MEDIA CONTROL VIA KEYBOARD SHORTCUTS
-            media_keywords = ['pause', 'play', 'mute', 'unmute', 'skip', 'next', 'previous']
+            # ✅ STEP 2: TRY PLATFORM-SPECIFIC KEYBOARD SHORTCUTS (GENERIC)
+            media_keywords = ['pause', 'play', 'mute', 'unmute', 'skip', 'next', 'previous', 'forward', 'rewind']
             is_media_action = any(keyword in ai_prompt.lower() for keyword in media_keywords)
             
-            if is_media_action and page_state_before and page_state_before.get('isYouTube'):
-                logger.info("🎬 Detected media control on YouTube - using keyboard shortcuts")
+            if is_media_action and page_state_before:
+                platform = page_state_before.get('platform', 'unknown')
                 
-                shortcut_result = await self.media_shortcuts.execute_media_shortcut(page, ai_prompt)
+                # Determine action from prompt
+                action_word = None
+                for keyword in media_keywords:
+                    if keyword in ai_prompt.lower():
+                        action_word = keyword
+                        break
                 
-                if shortcut_result['success']:
-                    # Wait for state change
-                    await page.wait_for_timeout(500)
+                if action_word:
+                    logger.info(f"🎬 Detected media control on {platform} - trying keyboard shortcut")
                     
-                    # Observe state after
-                    page_state_after = await self.state_observer.observe_page_state(page)
+                    shortcut_result = await KeyboardShortcuts.execute_shortcut(page, platform, action_word)
                     
-                    # Verify the change
-                    changes = await self.state_observer.compare_states(page_state_before, page_state_after)
-                    
-                    if changes['video_state_changed']:
-                        logger.info(f"✅ Media control succeeded via keyboard shortcut")
+                    if shortcut_result['success']:
+                        # Wait for state change
+                        await page.wait_for_timeout(500)
                         
-                        return WebExecutionResult(
-                            validation_passed=True,
-                            security_passed=True,
-                            output=f"EXECUTION_SUCCESS: Media control via keyboard shortcut ({shortcut_result['shortcut']})",
-                            page_url=page.url,
-                            page_title=await page.title(),
-                            page_state_before=page_state_before,
-                            page_state_after=page_state_after,
-                            verification_message=f"Video state changed: {changes['video_details']}",
-                            execution_time=(datetime.now() - start_time).total_seconds()
-                        )
+                        # Observe state after
+                        page_state_after = await observe_page_state(page)
+                        
+                        # Verify the change
+                        changes = await compare_states(page_state_before, page_state_after)
+                        
+                        if changes['media_state_changed']:
+                            logger.info(f"✅ Media control succeeded via keyboard shortcut")
+                            
+                            return WebExecutionResult(
+                                validation_passed=True,
+                                security_passed=True,
+                                output=f"EXECUTION_SUCCESS: Media control via keyboard shortcut ({shortcut_result['shortcut']}) on {platform}",
+                                page_url=page.url,
+                                page_title=await page.title(),
+                                page_state_before=page_state_before,
+                                page_state_after=page_state_after,
+                                verification_message=f"Media state changed: {changes.get('media_details', {})}",
+                                execution_time=(datetime.now() - start_time).total_seconds()
+                            )
+                        else:
+                            logger.warning(f"⚠️ Keyboard shortcut executed but no state change detected")
                     else:
-                        logger.warning(f"⚠️ Keyboard shortcut executed but no state change detected")
-                else:
-                    logger.info(f"ℹ️ Keyboard shortcut failed, falling back to RAG generation")
+                        logger.info(f"ℹ️ Keyboard shortcut not available for {action_word} on {platform}, falling back to RAG")
             
-            # ✅ STEP 3: GENERATE CODE WITH ENHANCED PROMPT (SMART INTENT)
+            # ✅ STEP 3: GENERATE CODE WITH SMART INTENT (PLATFORM-AWARE)
             logger.info(f"🧠 Using RAG to generate code from: {ai_prompt}")
             
             try:
@@ -766,7 +1068,7 @@ class WebExecutionPipeline:
             # ✅ STEP 5: OBSERVE STATE AFTER ACTION
             page_state_after = None
             if self.config.enable_page_state_layer:
-                page_state_after = await self.state_observer.observe_page_state(page)
+                page_state_after = await observe_page_state(page)
             
             # ✅ STEP 6: POST-ACTION VERIFICATION
             verification_passed = True
@@ -775,7 +1077,7 @@ class WebExecutionPipeline:
             if self.config.enable_verification and result.get('success'):
                 # Compare states
                 if page_state_before and page_state_after:
-                    changes = await self.state_observer.compare_states(page_state_before, page_state_after)
+                    changes = await compare_states(page_state_before, page_state_after)
                     
                     if changes['any_change']:
                         verification_message = f"✅ Page state changed as expected: {changes}"
@@ -876,8 +1178,8 @@ class WebExecutionPipeline:
         page_state: Optional[Dict] = None
     ) -> str:
         """
-        Generate code with SMART INTENT HANDLING.
-        ✅ Enhanced prompt that handles missing elements intelligently.
+        Generate code with SMART INTENT HANDLING + PLATFORM AWARENESS.
+        ✅ Enhanced prompt that adapts to detected platform.
         """
         
         await self._initialize_rag_system()
@@ -885,81 +1187,13 @@ class WebExecutionPipeline:
         # Get cached DOM context
         page_context = await self.context_cache.get_or_analyze(session_id, page)
         
-        # ✅ NEW: Build enhanced prompt with smart intent handling
-        if self.config.enable_page_context:
-            enhanced_prompt = f"""
-# CURRENT PAGE STATE
-URL: {page_context.get('url', 'unknown')}
-Title: {page_context.get('title', 'unknown')}
-
-# PAGE STATE INFORMATION
-{json.dumps(page_state, indent=2) if page_state else 'State not available'}
-
-# AVAILABLE INTERACTIVE ELEMENTS
-{page_context.get('semantics', 'unavailable')}
-
-# USER TASK
-{ai_prompt}
-
-================================================================
-ENHANCED RULES WITH SMART INTENT HANDLING:
-================================================================
-
-1. **Primary Approach**: Use ONLY elements that exist in the list above
-
-2. **Smart Intent for Missing Elements**: 
-   If the required element is NOT listed (e.g., mute button, volume control):
-   
-   a) For YouTube/Video sites:
-      - Use keyboard shortcuts instead of clicking UI elements
-      - Example: For "mute" → press 'm' key
-      - Example: For "pause" → press 'k' key
-      - Example: For "next video" → press 'Shift+N'
-   
-   b) For other missing elements:
-      - Try alternative selectors (aria-label, data attributes)
-      - Use page.evaluate() to directly manipulate DOM
-      - Example: `await page.evaluate('() => document.querySelector("video").muted = true')`
-   
-   c) Last resort:
-      - Print clear explanation of what was attempted
-      - Suggest user to provide more context
-
-3. **Success Criteria**:
-   - Print 'EXECUTION_SUCCESS' ONLY when the intended outcome is achieved
-   - Verify state change when possible
-   - For media controls: check video element state after action
-
-4. **Failure Handling**:
-   - If element truly doesn't exist and no alternative works:
-     Print 'FAILED: [specific reason]' with what you tried
-
-================================================================
-KEYBOARD SHORTCUTS (USE THESE WHEN UI ELEMENTS MISSING):
-================================================================
-
-YouTube Media Control:
-- Play/Pause: 'k'
-- Mute/Unmute: 'm'
-- Next video: 'Shift+N'
-- Previous video: 'Shift+P'
-- Fullscreen: 'f'
-- Increase speed: 'Shift+>'
-- Decrease speed: 'Shift+<'
-
-General:
-- Tab: Navigate between elements
-- Enter: Activate focused element
-- Escape: Close dialogs/fullscreen
-
-================================================================
-
-Generate code that intelligently handles the task even if exact UI elements are not listed.
-"""
+        # ✅ Build platform-aware smart intent prompt
+        if self.config.enable_page_context and page_state:
+            enhanced_prompt = build_smart_intent_prompt(page_state, ai_prompt, page_context)
         else:
             enhanced_prompt = ai_prompt
         
-        logger.info(f"🧠 RAG Query with smart intent handling")
+        logger.info(f"🧠 RAG Query with platform-aware smart intent")
         
         try:
             rag_result = self._rag_system.generate_code(
@@ -1387,9 +1621,10 @@ async def start_web_execution_agent_with_rag(broker_instance, rag_system, web_pi
     from agents.utils.protocol import Channels
     broker_instance.subscribe(Channels.COORDINATOR_TO_EXECUTION, handle_web_execution_request)
     
-    logger.info("✅ Web Execution Agent started with FULL enhancements")
+    logger.info("✅ Web Execution Agent started with ULTIMATE enhancements")
+    logger.info("   ✅ GENERIC multi-platform (YouTube, Amazon, Netflix, Google, ANY site)")
+    logger.info("   ✅ Platform-specific keyboard shortcuts")
     logger.info("   ✅ Page state layer")
-    logger.info("   ✅ Keyboard shortcuts for media")
     logger.info("   ✅ Post-action verification")
     logger.info("   ✅ Smart intent handling")
     logger.info("   ✅ Persistent context (separate from mem0)")
@@ -1422,15 +1657,15 @@ async def initialize_web_execution_agent_for_server(broker_instance):
             raise
         
         try:
-            logger.info("🚀 Initializing enhanced Playwright web pipeline...")
+            logger.info("🚀 Initializing ULTIMATE Playwright web pipeline...")
             
             web_config = WebExecutionConfig(
                 headless=False,
                 timeout_seconds=30,
                 enable_verification=True,
                 enable_page_context=True,
-                enable_page_state_layer=True,  # ✅ NEW
-                enable_smart_intent=True,      # ✅ NEW
+                enable_page_state_layer=True,
+                enable_smart_intent=True,
                 cache_page_context=True,
                 use_stealth_plugin=True,
                 randomize_fingerprint=True,
@@ -1439,16 +1674,15 @@ async def initialize_web_execution_agent_for_server(broker_instance):
             web_pipeline = WebExecutionPipeline(web_config)
             await web_pipeline.initialize()
             
-            logger.info("✅ Enhanced Playwright web pipeline ready")
+            logger.info("✅ ULTIMATE Playwright web pipeline ready")
             
         except Exception as e:
             logger.error(f"❌ Web pipeline initialization error: {e}")
             raise
         
-        logger.info("🌐 Starting enhanced web execution agent...")
+        logger.info("🌐 Starting ULTIMATE web execution agent...")
         await start_web_execution_agent_with_rag(broker_instance, rag_system, web_pipeline)
     
     except Exception as e:
         logger.error(f"❌ Failed to initialize web execution agent: {e}")
         raise
-    
