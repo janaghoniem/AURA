@@ -60,7 +60,7 @@ class MobileReActStrategy:
         # Initialize Groq LLM
         from groq import AsyncGroq
         
-        api_key = "APIKEY" 
+        api_key = " " 
         self.llm_client = AsyncGroq(api_key=api_key)
         self.model = "llama-3.3-70b-versatile"
         
@@ -772,7 +772,7 @@ RULES (Priority order):
 3. **🎯 GOAL COMPLETION CHECK** (CRITICAL - Check FIRST!):
    ```
    Ask yourself: "Is my goal already achieved?"
-   
+   for example:
    Goal: "Set alarm to 7:30 PM"
    Screen shows: TEXT "7:30 PM" alarm exists
    → GOAL ACHIEVED! Return: {{"thought": "goal achieved", "action_type": "complete"}}
