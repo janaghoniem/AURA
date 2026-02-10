@@ -97,3 +97,51 @@ vectordb/
 chromadb/
 backend/conversations.jsonl
 backend/chroma_db/chroma.sqlite3
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The Python Visual Studio Code extensions
+.vscode/
+
+# Flutter/Dart related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/temporary_extract
+**/ios/frameworks/
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Exceptions to the above
+!**/ios/Flutter/AppFrameworkInfo.plist
