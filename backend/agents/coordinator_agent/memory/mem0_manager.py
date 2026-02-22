@@ -26,11 +26,11 @@ class Mem0PreferenceManager:
             "vector_store": {
                 "provider": "mongodb",
                 "config": {
-                    "MONGODB_URI": MONGODB_URI,
+                    "mongo_uri": MONGODB_URI,
                     "db_name": "yusr_db",
                     "collection_name": "mem0_preferences",
-                    "embedding_model_dims": 384,
-                    "index_name": "vector_index"  # ← ADD THIS LINE
+                    "embedding_model_dims": 384
+                    # ✅ index_name removed - not needed in latest Mem0
                 }
             },
             "llm": {
@@ -52,21 +52,11 @@ class Mem0PreferenceManager:
         
         try:
             self.memory = Memory.from_config(config)
-            
-            # ✅ FIX: Ensure MongoDB collection is initialized
-            if hasattr(self.memory, 'vector_store'):
-                if hasattr(self.memory.vector_store, 'collection') and self.memory.vector_store.collection is None:
-                    from pymongo import MongoClient
-                    client = MongoClient(MONGODB_URI)
-                    db = client["yusr_db"]
-                    self.memory.vector_store.collection = db["mem0_preferences"]
-                    logger.info(f"✅ Manually initialized MongoDB collection for mem0")
-            
             logger.info(f"✅ Mem0 initialized for user {user_id} with MongoDB Atlas")
         except Exception as e:
             logger.error(f"❌ Mem0 initialization failed: {e}")
             raise
-    
+
     def add_preference(self, preference: str, metadata: Optional[Dict] = None) -> str:
         """Store a user preference"""
         try:
@@ -297,73 +287,64 @@ class Mem0PreferenceManager:
             return []
     #here
     def get_all_preferences(self) -> List[Dict]:
-        """
-        Get ALL stored preferences for this user in proper dictionary format.
-        
-        Returns:
-            List[Dict]: Each dict has structure:
-                {
-                    "id": "uuid-string",
-                    "memory": "The preference text",
-                    "metadata": {
-                        "category": "personal_info",
-                        "timestamp": 1234567890.123,
-                        "source": "user_input",
-                        ...
+            """
+            Get ALL stored preferences for this user in proper dictionary format.
+            
+            Returns:
+                List[Dict]: Each dict has structure:
+                    {
+                        "id": "uuid-string",
+                        "memory": "The preference text",
+                        "metadata": {
+                            "category": "personal_info",
+                            "timestamp": 1234567890.123,
+                            "source": "user_input",
+                            ...
+                        }
                     }
-                }
-        """
-        try:
-            logger.info(f"📥 Fetching all preferences for user {self.user_id}")
-            
-            # ✅ FIX: Use search instead of get_all to ensure collection access
+            """
             try:
-                # Try get_all first (faster if it works)
+                logger.info(f"📥 Fetching all preferences for user {self.user_id}")
+                
+                # Mem0's get_all() returns a dict with 'results' key
                 response = self.memory.get_all(user_id=self.user_id)
-            except AttributeError as e:
-                logger.warning(f"⚠️ get_all() failed with AttributeError, falling back to search: {e}")
-                # Fallback: Use search with broad query
-                response = self.memory.search(
-                    query="user preferences",
-                    user_id=self.user_id,
-                    limit=1000
-                )
-            
-            # Extract the actual memories from the response
-            if isinstance(response, dict) and "results" in response:
-                raw_memories = response["results"]
-            elif isinstance(response, list):
-                raw_memories = response
-            else:
-                logger.warning(f"⚠️ Unexpected response format: {type(response)}")
+                
+                # Extract the actual memories from the response
+                if isinstance(response, dict) and "results" in response:
+                    raw_memories = response["results"]
+                elif isinstance(response, list):
+                    raw_memories = response
+                else:
+                    logger.warning(f"⚠️ Unexpected response format: {type(response)}")
+                    return []
+                
+                # Transform each memory into the expected format
+                formatted_memories = []
+                for mem in raw_memories:
+                    if isinstance(mem, dict):
+                        # Mem0 returns: {"id": "...", "memory": "...", "metadata": {...}}
+                        formatted_memories.append({
+                            "id": mem.get("id", ""),
+                            "memory": mem.get("memory", ""),
+                            "metadata": mem.get("metadata", {})
+                        })
+                    elif isinstance(mem, str):
+                        # Fallback for string-only memories (shouldn't happen with new Mem0)
+                        logger.warning(f"⚠️ Got string-only memory: {mem[:50]}...")
+                        formatted_memories.append({
+                            "id": "",
+                            "memory": mem,
+                            "metadata": {"category": "general"}
+                        })
+                
+                logger.info(f"✅ Retrieved {len(formatted_memories)} formatted preferences")
+                return formatted_memories
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to get all preferences: {e}", exc_info=True)
                 return []
-            
-            # Transform each memory into the expected format
-            formatted_memories = []
-            for mem in raw_memories:
-                if isinstance(mem, dict):
-                    # Mem0 returns: {"id": "...", "memory": "...", "metadata": {...}}
-                    formatted_memories.append({
-                        "id": mem.get("id", ""),
-                        "memory": mem.get("memory", ""),
-                        "metadata": mem.get("metadata", {})
-                    })
-                elif isinstance(mem, str):
-                    # Fallback for string-only memories
-                    logger.warning(f"⚠️ Got string-only memory: {mem[:50]}...")
-                    formatted_memories.append({
-                        "id": "",
-                        "memory": mem,
-                        "metadata": {"category": "general"}
-                    })
-            
-            logger.info(f"✅ Retrieved {len(formatted_memories)} formatted preferences")
-            return formatted_memories
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to get all preferences: {e}", exc_info=True)
-            # ✅ CRITICAL: Always return empty list on error, never None
-            return []
+
+
     def delete_preference(self, memory_id: str) -> bool:
         """Delete a specific preference"""
         try:
