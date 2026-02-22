@@ -13,7 +13,8 @@ from langgraph.checkpoint.mongodb import MongoDBSaver
 import logging
 from agents.utils.protocol import (
     Channels, AgentMessage, MessageType, AgentType, 
-    ExecutionResult, TaskMessage
+    ExecutionResult, TaskMessage,
+    StructuredResponse, ResponseType, ContextSnapshot
 )
 from agents.utils.broker import broker
 from ThinkingStepManager import ThinkingStepManager
@@ -448,270 +449,148 @@ For extraction tasks:
 }}
 
 ============================
-VALID EXAMPLES
+EXAMPLES (YAML format for brevity, output must be JSON)
 ============================
 
 ## Example 1: Simple Desktop Task
 
 User: "Open Notepad"
 
-Return:
-[
-  {{
-    "task_id": "task_1",
-    "ai_prompt": "Open Notepad application",
-    "device": "desktop",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{"app_name": "notepad"}},
-    "web_params": {{}},
-    "depends_on": null
-  }}
-]
+- task_id: task_1
+  ai_prompt: Open Notepad application
+  device: desktop
+  context: local
+  target_agent: action
+  extra_params:
+    app_name: notepad
+  web_params: {{}}
+  depends_on: null
 
-## Example 2: Simple Web Navigation Task
-
-User: "Go to Google"
-
-Return:
-[
-  {{
-    "task_id": "task_1",
-    "ai_prompt": "Navigate to Google homepage",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "navigate"
-    }},
-    "depends_on": null
-  }}
-]
-
-EXPLANATION: The ai_prompt "Navigate to Google homepage" will be sent to the web execution layer,
-which will use RAG to generate Playwright code that includes the URL https://www.google.com.
-
-## Example 3: Login Task (ANY WEBSITE)
+## Example 2: Login Task (ANY WEBSITE)
 
 User: "Login to Gmail with user@example.com and password mypass123"
 
-Tasks:
-[
-  {{
-    "task_id": "task_1",
-    "ai_prompt": "Navigate to Gmail login page",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "navigate"
-    }},
-    "depends_on": null
-  }},
-  {{
-    "task_id": "task_2",
-    "ai_prompt": "Fill email field with user@example.com",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "fill",
-      "text": "user@example.com"
-    }},
-    "depends_on": "task_1"
-  }},
-  {{
-    "task_id": "task_3",
-    "ai_prompt": "Fill password field with mypass123",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "fill",
-      "text": "mypass123"
-    }},
-    "depends_on": "task_2"
-  }},
-  {{
-    "task_id": "task_4",
-    "ai_prompt": "Click login button",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "click"
-    }},
-    "depends_on": "task_3"
-  }}
-]
+- task_id: task_1
+  ai_prompt: Navigate to Gmail login page
+  device: desktop
+  context: web
+  target_agent: action
+  web_params:
+    action: navigate
+  depends_on: null
 
-## Example 4: Composite Web Task (E-commerce Search)
+- task_id: task_2
+  ai_prompt: Fill email field with user@example.com
+  device: desktop
+  context: web
+  target_agent: action
+  web_params:
+    action: fill
+    text: user@example.com
+  depends_on: task_1
 
-User: "Search Amazon for white socks and extract the first 5 product titles"
+- task_id: task_3
+  ai_prompt: Fill password field with mypass123
+  device: desktop
+  context: web
+  target_agent: action
+  web_params:
+    action: fill
+    text: mypass123
+  depends_on: task_2
 
-Tasks:
-[
-  {{
-    "task_id": "task_1",
-    "ai_prompt": "Navigate to Amazon homepage",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "navigate"
-    }},
-    "depends_on": null
-  }},
-  {{
-    "task_id": "task_2",
-    "ai_prompt": "Fill Amazon search box with 'white socks'",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "fill",
-      "text": "white socks"
-    }},
-    "depends_on": "task_1"
-  }},
-  {{
-    "task_id": "task_3",
-    "ai_prompt": "Click Amazon search button",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "click"
-    }},
-    "depends_on": "task_2"
-  }},
-  {{
-    "task_id": "task_4",
-    "ai_prompt": "Extract first 5 product titles from Amazon search results",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "extract"
-    }},
-    "depends_on": "task_3"
-  }}
-]
+- task_id: task_4
+  ai_prompt: Click login button
+  device: desktop
+  context: web
+  target_agent: action
+  web_params:
+    action: click
+  depends_on: task_3
 
-EXPLANATION: Each ai_prompt is descriptive enough for RAG to generate the correct
-Playwright code with selectors, URLs, and wait strategies.
+EXPLANATION: ai_prompt drives RAG to resolve URLs and selectors automatically.
 
-## Example 5: Mixed Desktop + Web Task
-
-User: "Search Google for 'Playwright tutorial' and copy the first result title to Notepad"
-
-Tasks:
-[
-  {{
-    "task_id": "task_1",
-    "ai_prompt": "Navigate to Google homepage",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "navigate"
-    }},
-    "depends_on": null
-  }},
-  {{
-    "task_id": "task_2",
-    "ai_prompt": "Fill Google search box with 'Playwright tutorial'",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "fill",
-      "text": "Playwright tutorial"
-    }},
-    "depends_on": "task_1"
-  }},
-  {{
-    "task_id": "task_3",
-    "ai_prompt": "Extract the first search result title from Google",
-    "device": "desktop",
-    "context": "web",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{
-      "action": "extract"
-    }},
-    "depends_on": "task_2"
-  }},
-  {{
-    "task_id": "task_4",
-    "ai_prompt": "Open Notepad application",
-    "device": "desktop",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{"app_name": "notepad"}},
-    "web_params": {{}},
-    "depends_on": "task_3"
-  }},
-  {{
-    "task_id": "task_5",
-    "ai_prompt": "Type the extracted search result title into Notepad",
-    "device": "desktop",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{"input_from": "task_3"}},
-    "web_params": {{}},
-    "depends_on": "task_4"
-  }}
-]
-
-## Example 5: Mobile Configuration Task
+## Example 3: Mobile Configuration Task
 
 User: "Set the alarm for 7 am"
 
-Tasks:
-[
-  {{
-    "task_id": "task_1",
-    "ai_prompt": "Open the Clock app on mobile device",
-    "device": "mobile",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{"app_name": "clock"}},
-    "web_params": {{}},
-    "depends_on": null
-  }},
-  {{
-    "task_id": "task_2",
-    "ai_prompt": "Set the alarm time to 7:00 AM",
-    "device": "mobile",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{"time": "7:00"}},
-    "web_params": {{}},
-    "depends_on": "task_1"
-  }},
-  {{
-    "task_id": "task_3",
-    "ai_prompt": "Press OK or Save to confirm the alarm setting",
-    "device": "mobile",
-    "context": "local",
-    "target_agent": "action",
-    "extra_params": {{}},
-    "web_params": {{}},
-    "depends_on": "task_2"
-  }}
-]
+- task_id: task_1
+  ai_prompt: Open the Clock app on mobile device
+  device: mobile
+  context: local
+  target_agent: action
+  extra_params:
+    app_name: clock
+  depends_on: null
+
+- task_id: task_2
+  ai_prompt: Set the alarm time to 7:00 AM
+  device: mobile
+  context: local
+  target_agent: action
+  extra_params:
+    time: "7:00"
+  depends_on: task_1
+
+- task_id: task_3
+  ai_prompt: Press OK or Save to confirm the alarm setting
+  device: mobile
+  context: local
+  target_agent: action
+  depends_on: task_2
+
+## Example 4: Mixed Action + Reasoning (Content Generation)
+
+User: "Open Notepad and write me a scary story"
+
+- task_id: task_1
+  ai_prompt: Open Notepad application
+  device: desktop
+  context: local
+  target_agent: action
+  extra_params:
+    app_name: notepad
+  web_params: {{}}
+  depends_on: null
+
+- task_id: task_2
+  ai_prompt: Write a very scary story
+  device: desktop
+  context: local
+  target_agent: reasoning
+  extra_params: {{}}
+  web_params: {{}}
+  depends_on: task_1
+
+- task_id: task_3
+  ai_prompt: Type the generated story text into the active Notepad window
+  device: desktop
+  context: local
+  target_agent: action
+  extra_params: {{}}
+  web_params: {{}}
+  depends_on: task_2
+
+EXPLANATION: Task 2 uses "reasoning" because writing a story is content generation. Task 3 uses "action" to type the result into Notepad.
+
+# WHEN TO USE target_agent: "reasoning" vs "action"
+
+- **"action"**: Tasks that interact with the OS, apps, or browser (open, click, type, navigate, fill, screenshot, etc.)
+- **"reasoning"**: Tasks that generate, summarize, analyze, research, write, translate, or answer questions. Content creation (stories, essays, code, emails, poems) is ALWAYS reasoning. If a task does NOT require interacting with a UI element, it is reasoning.
+
+Examples of REASONING tasks:
+- "Write a scary story" → reasoning
+- "Summarize this article" → reasoning
+- "Translate this to Arabic" → reasoning
+- "Draft an email to my boss" → reasoning
+- "Explain quantum computing" → reasoning
+- "Generate a Python script" → reasoning
+
+Examples of ACTION tasks:
+- "Open Notepad" → action
+- "Click the submit button" → action
+- "Navigate to google.com" → action
+- "Type 'hello' in the search box" → action
 
 # CRITICAL RULES
 
@@ -724,6 +603,7 @@ Tasks:
 7. **NO selectors** - NEVER hardcode selectors, let RAG find them from ai_prompt
 8. **Empty web_params** - For local tasks, set web_params: {{}}
 9. **Include confirmation steps** - For configuration tasks (alarms, forms, settings), always add a final task to confirm/save changes
+10. **Content generation = reasoning** - Writing, summarizing, translating, or any creative/analytical task MUST use target_agent: "reasoning"
 
 ============================
 OUTPUT RULES
@@ -923,6 +803,13 @@ def create_coordinator_graph():
                 if input_task_id in task_outputs:
                     current_task.extra_params["input_content"] = task_outputs[input_task_id]
             
+            # Auto-inject reasoning output into dependent action tasks
+            if current_task.depends_on:
+                dep_id = current_task.depends_on.strip().split(",")[0].strip()
+                if dep_id in task_outputs and "input_content" not in current_task.extra_params:
+                    current_task.extra_params["input_content"] = task_outputs[dep_id]
+                    logger.info(f"📎 Auto-injected output from {dep_id} into {current_task.task_id}")
+            
             # Execute task
             logger.info(f"🔄 Executing {current_task.task_id}: {current_task.ai_prompt[:50]}...")
             result = await execute_single_task(current_task, session_id, original_message_id)
@@ -989,6 +876,40 @@ def create_coordinator_graph():
         else:
             response_text = "Task could not be completed. Please try again."
         
+        # Build detailed content from task results
+        detail_lines = []
+        has_reasoning_content = False
+        for task_obj in state.get("tasks", []):
+            tid = task_obj.task_id if hasattr(task_obj, 'task_id') else task_obj.get('task_id', '')
+            r = results.get(tid)
+            if r and r.content:
+                detail_lines.append(r.content)
+                if hasattr(task_obj, 'target_agent') and task_obj.target_agent == "reasoning":
+                    has_reasoning_content = True
+        
+        full_content = "\n\n".join(detail_lines) if detail_lines else response_text
+        
+        # Determine response type
+        if success_count == 0:
+            resp_type = ResponseType.ERROR_RECOVERABLE
+        elif success_count < total_count:
+            resp_type = ResponseType.PARTIAL_RESULT
+        elif detail_lines:
+            resp_type = ResponseType.RESULT_WITH_CONTENT
+        else:
+            resp_type = ResponseType.SIMPLE_ACK
+        
+        # Build StructuredResponse
+        original_request = state["input"].get("confirmation", state["input"].get("action", ""))
+        structured = StructuredResponse(
+            type=resp_type,
+            spoken_text=response_text,
+            full_content=full_content if full_content != response_text else None,
+            offer_read_aloud=has_reasoning_content and len(full_content) > 200,
+            offer_actions=["undo", "retry"] if success_count > 0 else ["retry"],
+            context_for_undo={"original_request": original_request, "completed_tasks": [t.task_id for t in state.get("tasks", [])]}
+        )
+        
         response_msg = AgentMessage(
             message_type=MessageType.TASK_RESPONSE,
             sender=AgentType.COORDINATOR,
@@ -998,6 +919,7 @@ def create_coordinator_graph():
             payload={
                 "status": "success" if success_count > 0 else "failed",
                 "response": response_text,
+                "structured_response": structured.model_dump(),
                 "result": {
                     "completed_tasks": {k: v.status for k, v in results.items()},
                     "details": [v.model_dump() for v in results.values()]
@@ -1007,6 +929,17 @@ def create_coordinator_graph():
         
         logger.info(f"📤 Sending feedback: {response_text}")
         await broker.publish(Channels.COORDINATOR_TO_LANGUAGE, response_msg)
+        
+        # Also publish structured response via WebSocket channel for real-time delivery
+        ws_msg = AgentMessage(
+            message_type=MessageType.STRUCTURED_RESPONSE,
+            sender=AgentType.COORDINATOR,
+            receiver=AgentType.LANGUAGE,
+            session_id=session_id,
+            response_to=original_message_id,
+            payload=structured.model_dump()
+        )
+        await broker.publish(Channels.WEBSOCKET_OUTPUT, ws_msg)
         
         if success_count == total_count and total_count > 0:
             try:
@@ -1313,7 +1246,7 @@ async def start_coordinator_agent(broker_instance):
             logger.error(f"❌ Unexpected error setting result for {task_id}: {e}")
     
     async def handle_interrupt_command(message: AgentMessage):
-        """Handle pause/stop/resume commands"""
+        """Handle pause/stop/resume commands with context snapshot support"""
         command = message.payload.get("command")
         
         if command == "pause":
@@ -1321,6 +1254,46 @@ async def start_coordinator_agent(broker_instance):
         elif command == "resume":
             task_queue.resume()
         elif command == "stop":
+            # Save context snapshot before stopping for potential undo/resume
+            try:
+                completed = [
+                    e["task"]["ai_prompt"] for e in task_queue.execution_history
+                    if e["result"]["status"] == "success"
+                ]
+                pending = [t.ai_prompt for t in list(task_queue.current_queue)]
+                
+                snapshot = ContextSnapshot(
+                    session_id=message.session_id,
+                    user_id=message.payload.get("user_id", "unknown"),
+                    original_request=message.payload.get("original_request", ""),
+                    completed_tasks=completed,
+                    pending_tasks=pending,
+                    current_task_state=task_queue.current_task_id,
+                    execution_outputs={
+                        e["task"]["task_id"]: e["result"].get("content", "")
+                        for e in task_queue.execution_history
+                        if e["result"]["status"] == "success"
+                    },
+                    is_reversible=len(completed) > 0
+                )
+                
+                # Publish snapshot via WebSocket for frontend undo capability
+                snapshot_msg = AgentMessage(
+                    message_type=MessageType.TASK_PROGRESS,
+                    sender=AgentType.COORDINATOR,
+                    receiver=AgentType.LANGUAGE,
+                    session_id=message.session_id,
+                    response_to=message.message_id,
+                    payload={
+                        "type": "context_snapshot",
+                        "snapshot": snapshot.model_dump()
+                    }
+                )
+                await broker_instance.publish(Channels.WEBSOCKET_OUTPUT, snapshot_msg)
+                logger.info(f"📸 Saved context snapshot: {len(completed)} completed, {len(pending)} pending")
+            except Exception as e:
+                logger.error(f"❌ Failed to save context snapshot: {e}")
+            
             task_queue.stop()
         elif command == "retry":
             # Retry from last failed task
@@ -1332,7 +1305,7 @@ async def start_coordinator_agent(broker_instance):
         
         # Send acknowledgment
         ack_msg = AgentMessage(
-            message_type=MessageType.TASK_RESPONSE,
+            message_type=MessageType.INTERRUPT_ACK,
             sender=AgentType.COORDINATOR,
             receiver=AgentType.LANGUAGE,
             session_id=message.session_id,
@@ -1340,6 +1313,9 @@ async def start_coordinator_agent(broker_instance):
             payload={"status": "acknowledged", "command": command}
         )
         await broker_instance.publish(Channels.COORDINATOR_TO_LANGUAGE, ack_msg)
+        
+        # Also send ack via WebSocket for real-time UI update
+        await broker_instance.publish(Channels.WEBSOCKET_OUTPUT, ack_msg)
     
     async def handle_session_control(message: AgentMessage):
         """Handle session reset"""

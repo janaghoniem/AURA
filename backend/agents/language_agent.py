@@ -110,7 +110,8 @@ Output ONLY valid JSON with this structure. NO BACKSLASHES IN STRINGS:
 {
     "is_complete": boolean,
     "response_text": "Brief answer/confirmation/single clarification question",
-    "original_task": "Exact user input with backslashes converted to forward slashes (null if is_complete is false)"
+    "original_task": "Exact user input with backslashes converted to forward slashes (null if is_complete is false)",
+    "personal_info": "One-sentence summary of personal info revealed (name, age, location, hobby, preference, etc.), or null if none"
 }
 
 ### PATH FORMATTING RULE
@@ -121,27 +122,31 @@ Always convert Windows backslashes to forward slashes in original_task:
 
 **Example 1: Question - Answer it**
 Input: "What is a calculator?"
-Output: {"is_complete": false, "response_text": "A calculator is a tool for performing mathematical calculations. Would you like me to open it?", "original_task": null}
+Output: {"is_complete": false, "response_text": "A calculator is a tool for performing mathematical calculations. Would you like me to open it?", "original_task": null, "personal_info": null}
 
 **Example 2: Task with explicit target - Complete**
 Input: "Open calculator"
-Output: {"is_complete": true, "response_text": "Opening calculator.", "original_task": "Open calculator"}
+Output: {"is_complete": true, "response_text": "Opening calculator.", "original_task": "Open calculator", "personal_info": null}
 
 **Example 3: Task with filepath - Complete**
 Input: "summarize the content of the file C:\\Users\\uscs\\Downloads\\coordinator to do.txt"
-Output: {"is_complete": true, "response_text": "I'll summarize that file for you.", "original_task": "summarize the content of the file C:/Users/uscs/Downloads/coordinator to do.txt"}
+Output: {"is_complete": true, "response_text": "I'll summarize that file for you.", "original_task": "summarize the content of the file C:/Users/uscs/Downloads/coordinator to do.txt", "personal_info": null}
 
 **Example 4: Task with time context - Complete**
 Input: "set an alarm for 7 am tomorrow"
-Output: {"is_complete": true, "response_text": "Setting alarm for 7 AM tomorrow.", "original_task": "set an alarm for 7 am tomorrow"}
+Output: {"is_complete": true, "response_text": "Setting alarm for 7 AM tomorrow.", "original_task": "set an alarm for 7 am tomorrow", "personal_info": null}
 
 **Example 5: Vague task blocking execution - Incomplete**
 Input: "send the message"
-Output: {"is_complete": false, "response_text": "Who should I send the message to?", "original_task": null}
+Output: {"is_complete": false, "response_text": "Who should I send the message to?", "original_task": null, "personal_info": null}
 
 **Example 6: Task with inferrable defaults - Complete**
 Input: "search for AI news"
-Output: {"is_complete": true, "response_text": "Searching for AI news.", "original_task": "search for AI news"}
+Output: {"is_complete": true, "response_text": "Searching for AI news.", "original_task": "search for AI news", "personal_info": null}
+
+**Example 7: Personal info detected**
+Input: "My name is Jana and I'm a computer science student"
+Output: {"is_complete": false, "response_text": "Nice to meet you, Jana! How can I help you today?", "original_task": null, "personal_info": "User's name is Jana and she is a computer science student"}
 
 ### TASK TO CLASSIFY:"""
 
@@ -252,14 +257,18 @@ class LanguageAgent:
         self._save_conversation()
 
     def parse_response(self, response: str) -> tuple:
-        """Parse LLM response to extract is_complete status - FIX: Handle backslashes"""
+        """Parse LLM response to extract is_complete status and personal_info"""
         try:
             # FIX: Replace backslashes with forward slashes before parsing
             cleaned_response = response.replace("\\\\", "/").replace("\\", "/")
             parsed = json.loads(cleaned_response)
             is_complete = parsed.get("is_complete", False)
             response_text = parsed.get("response_text", "")
-            return response_text, is_complete
+            personal_info = parsed.get("personal_info", None)
+            # Normalize "null" string to None
+            if personal_info and str(personal_info).lower() == "null":
+                personal_info = None
+            return response_text, is_complete, personal_info
         except json.JSONDecodeError as e:
             logger.error(f"⚠️ JSON parse error: {e}")
             logger.error(f"⚠️ Raw response: {response}")
@@ -268,13 +277,13 @@ class LanguageAgent:
                 import re
                 match = re.search(r'"response_text":\s*"([^"]+)"', response)
                 if match:
-                    return match.group(1), False
+                    return match.group(1), False, None
             except:
                 pass
-            return "I'm sorry, I didn't quite understand. Could you clarify?", False
+            return "I'm sorry, I didn't quite understand. Could you clarify?", False, None
         except Exception as e:
             logger.warning(f"⚠️ Failed to parse response: {e}")
-            return "I'm sorry, I didn't quite understand. Could you clarify?", False
+            return "I'm sorry, I didn't quite understand. Could you clarify?", False, None
 
     def user_turn(self, user_text: str) -> tuple:
         """Process user input and return response"""
@@ -300,14 +309,14 @@ class LanguageAgent:
         
         if not response:
             response_text = "I'm having trouble connecting right now. Please try again."
-            return response_text, False
+            return response_text, False, None
         
-        response_text, is_complete = self.parse_response(response)
+        response_text, is_complete, personal_info = self.parse_response(response)
 
         self.memory.append({"role": "assistant", "content": response})
         self.save_memory()
         
-        return response_text, is_complete
+        return response_text, is_complete, personal_info
     
     def clear_conversation(self):
         """Clear conversation history (for new chat)"""
@@ -439,44 +448,25 @@ async def start_language_agent(broker):
         # NEW: Send thinking update before calling agent
         await ThinkingStepManager.update_step(session_id, "Processing your request...", http_request_id)
 
-        response, is_complete = agent.user_turn(input_text)
+        response, is_complete, personal_info = agent.user_turn(input_text)
         print(f"🤖 Agent: {response}\n")
-        try:
-            _extraction_prompt = (
-                'You are a personal-info extractor. Read the user message below.\n'
-                'If it contains personal information (name, age, location, job, hobby,\n'
-                'preference, or any fact about the user), extract it.\n'
-                'If it does NOT contain personal info, return exactly: {"personal_info": null}\n\n'
-                f'USER MESSAGE: "{input_text}"\n\n'
-                'Return ONLY valid JSON, no markdown, no explanation:\n'
-                '{"personal_info": "one-sentence summary of what the user revealed, or null"}'
-            )
-            _ext_response = call_groq_api(
-                [{"role": "system", "content": _extraction_prompt}],
-                max_tokens=100
-            )
-            if _ext_response:
-                _clean = _ext_response.strip()
-                if _clean.startswith("```"):
-                    _clean = _clean.split("```")[1]
-                    if _clean.startswith("json"):
-                        _clean = _clean[4:]
-                _extracted = json.loads(_clean.strip())
-                _pi = _extracted.get("personal_info")
-                if _pi and str(_pi).lower() != "null":
-                    from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
-                    _pmgr = get_preference_manager(user_id)
-                    _pmgr.add_preference(
-                        str(_pi),
-                        metadata={
-                            "category": "personal_info",
-                            "source": "language_agent",
-                            "session_id": session_id
-                        }
-                    )
-                    print(f"💾 Stored personal info: {_pi}")
-        except Exception as _ext_err:
-            logger.warning(f"⚠️ Personal info extraction (non-fatal): {_ext_err}")
+
+        # Store personal info if extracted (no separate LLM call needed)
+        if personal_info:
+            try:
+                from agents.coordinator_agent.memory.mem0_manager import get_preference_manager
+                _pmgr = get_preference_manager(user_id)
+                _pmgr.add_preference(
+                    str(personal_info),
+                    metadata={
+                        "category": "personal_info",
+                        "source": "language_agent",
+                        "session_id": session_id
+                    }
+                )
+                print(f"💾 Stored personal info: {personal_info}")
+            except Exception as _ext_err:
+                logger.warning(f"⚠️ Personal info storage (non-fatal): {_ext_err}")
         
         if is_complete:
             # NEW: Send thinking update

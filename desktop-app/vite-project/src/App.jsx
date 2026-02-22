@@ -1,11 +1,13 @@
 // App.jsx
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import Sidebar from "./components/SideBar";
 import HeaderContent from "./components/HeaderContent";
 import VoiceControls from "./components/VoiceControls";
 import SettingsModal from "./components/SettingsModal";
 import ThinkingIndicator from "./components/ThinkingIndicator";
+import screenReader from "./utils/ScreenReader";
+import { Mic, Pause, Square } from "lucide-react";
 
 function App() {
   /* ---------- STATE ---------- */
@@ -54,6 +56,28 @@ function App() {
   // True when server-provided SSE thinking stream is connected
   const [sseConnected, setSseConnected] = useState(false);
 
+  // WebSocket state
+  const wsRef = useRef(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsReconnectTimer = useRef(null);
+
+  // Execution mode: normal, transparent, or widget
+  const [executionMode, setExecutionMode] = useState("normal");
+  const [widgetText, setWidgetText] = useState("");
+  const [contextSnapshot, setContextSnapshot] = useState(null);
+
+  // Structured response state
+  const [structuredResponse, setStructuredResponse] = useState(null);
+  const [offerReadAloud, setOfferReadAloud] = useState(false);
+
+  // Interrupt commands (EN + AR)
+  const INTERRUPT_COMMANDS = {
+    "aura stop": "stop", "aura pause": "pause", "aura undo": "stop",
+    "aura resume": "resume", "aura continue": "resume",
+    "أورا وقف": "stop", "أورا توقف": "stop", "أورا إيقاف": "stop",
+    "أورا استمر": "resume", "أورا كمل": "resume", "أورا تراجع": "stop",
+  };
+
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(new Audio());
@@ -88,9 +112,22 @@ function App() {
     };
   }, [browserSupportsSpeechRecognition]);
 
-  // Detect wake word in interim or final transcripts (word-boundary aware)
+  // Detect wake word AND interrupt commands in speech (always active, even during processing)
   useEffect(() => {
-    const combined = `${interimTranscript || ''} ${finalTranscript || ''} ${transcript || ''}`.toLowerCase();
+    const combined = `${interimTranscript || ''} ${finalTranscript || ''} ${transcript || ''}`.toLowerCase().trim();
+    if (!combined) return;
+
+    // Check for interrupt commands FIRST (these work during processing/speaking)
+    for (const [phrase, command] of Object.entries(INTERRUPT_COMMANDS)) {
+      if (combined.includes(phrase)) {
+        console.log(`[Wake] Interrupt command detected: "${phrase}" → ${command}`);
+        resetTranscript();
+        sendInterrupt(command);
+        return;
+      }
+    }
+
+    // Then check for wake word (only activates recording when idle)
     if (/\baura\b/.test(combined)) {
       console.log('[Wake] Wake word detected in speech transcript');
       resetTranscript();
@@ -125,8 +162,152 @@ function App() {
     }
   }, []);
 
-    /* ---------- CONNECT TO THINKING STREAM ---------- */
+    /* ---------- CONNECT TO WEBSOCKET (primary) + SSE FALLBACK ---------- */
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+
+    const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('[WS] Connected');
+      setWsConnected(true);
+      if (wsReconnectTimer.current) {
+        clearTimeout(wsReconnectTimer.current);
+        wsReconnectTimer.current = null;
+      }
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        console.log('[WS] Message:', msg.type);
+
+        switch (msg.type) {
+          case 'thinking_step':
+            setThinkingSteps(prev => {
+              if (prev.includes(msg.step)) return prev;
+              return [...prev, msg.step];
+            });
+            setIsThinking(true);
+            break;
+
+          case 'clarification':
+            setThinkingSteps([]);
+            setIsThinking(false);
+            setClarificationResponseToId(msg.response_id);
+            setAssistantMessage(msg.question);
+            // Use client-side TTS
+            setOrbState("speaking");
+            screenReader.speak(msg.question, {
+              onComplete: () => setOrbState("idle")
+            });
+            break;
+
+          case 'completion':
+          case 'structured_response': {
+            setThinkingSteps([]);
+            setIsThinking(false);
+            setClarificationResponseToId(null);
+            
+            const responseText = msg.spoken_text || msg.response || msg.text || "Task completed";
+            setAssistantMessage(responseText);
+
+            // Handle structured response
+            if (msg.structured_response || msg.type === 'structured_response') {
+              const sr = msg.structured_response || msg;
+              setStructuredResponse(sr);
+              setOfferReadAloud(sr.offer_read_aloud === true);
+              
+              if (sr.full_content && sr.full_content !== responseText) {
+                // Store full content for read-aloud
+                setStructuredResponse(prev => ({ ...prev, full_content: sr.full_content }));
+              }
+            }
+
+            // Speak the response with client-side TTS
+            setOrbState("speaking");
+            screenReader.speak(responseText, {
+              onComplete: () => {
+                setOrbState("idle");
+                // Exit transparent mode when task completes
+                setExecutionMode(prev => prev === "transparent" ? "normal" : prev);
+              }
+            });
+            break;
+          }
+
+          case 'interrupt_ack':
+            console.log('[WS] Interrupt acknowledged:', msg.command);
+            if (msg.command === 'stop') {
+              screenReader.stop();
+              setOrbState("idle");
+              setIsThinking(false);
+              setThinkingSteps([]);
+              setAssistantMessage(`Stopped. ${msg.command === 'stop' ? 'Task cancelled.' : ''}`);
+              setExecutionMode("normal");
+            } else if (msg.command === 'pause') {
+              setAssistantMessage("Paused. Say 'AURA resume' to continue.");
+            } else if (msg.command === 'resume') {
+              setAssistantMessage("Resuming...");
+            }
+            break;
+
+          case 'context_snapshot':
+            if (msg.snapshot) {
+              setContextSnapshot(msg.snapshot);
+              console.log('[WS] Context snapshot saved for undo');
+            }
+            break;
+
+          case 'proactive_prompt':
+            setAssistantMessage(msg.spoken_text || msg.text);
+            setOrbState("speaking");
+            screenReader.speak(msg.spoken_text || msg.text, {
+              onComplete: () => setOrbState("idle")
+            });
+            break;
+
+          case 'error':
+            setThinkingSteps([]);
+            setIsThinking(false);
+            setAssistantMessage(msg.detail || "An error occurred");
+            setOrbState("idle");
+            break;
+
+          default:
+            console.log('[WS] Unknown message type:', msg.type);
+        }
+      } catch (err) {
+        console.warn('[WS] Failed to parse message:', err);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('[WS] Disconnected');
+      setWsConnected(false);
+      // Auto-reconnect after 3s
+      wsReconnectTimer.current = setTimeout(connectWebSocket, 3000);
+    };
+
+    ws.onerror = (err) => {
+      console.warn('[WS] Error:', err);
+      ws.close();
+    };
+  }, [sessionId]); // Do NOT include executionMode — it would tear down the WS connection on mode change
+
   useEffect(() => {
+    connectWebSocket();
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      if (wsReconnectTimer.current) clearTimeout(wsReconnectTimer.current);
+    };
+  }, [connectWebSocket]);
+
+  // SSE Fallback - only used when WebSocket is not connected
+  useEffect(() => {
+    if (wsConnected) return; // Skip SSE when WS is active
+
     const eventSource = new EventSource(`http://localhost:8000/thinking-stream/${sessionId}`);
 
     eventSource.onopen = () => {
@@ -171,7 +352,7 @@ function App() {
       setSseConnected(false);
       eventSource.close();
     };
-  }, [sessionId]);
+  }, [sessionId, wsConnected]);
 
   /* ---------- HANDLE THINKING UPDATES ---------- */
   const handleThinkingUpdate = (step) => {
@@ -365,7 +546,7 @@ function App() {
 
   const handleMicClick = () => {
     console.log("[UI] Mic clicked. State:", orbState);
-    if (orbState === "processing" || orbState === "speaking") return;
+    // Allow mic during processing/speaking for interrupt commands
     isRecording ? stopRecording() : startRecording();
   };
 
@@ -447,23 +628,82 @@ function App() {
     }
   };
 
+  /* ---------- INTERRUPT COMMANDS ---------- */
+  const sendInterrupt = useCallback((command) => {
+    console.log(`[Interrupt] Sending: ${command}`);
+    
+    // Immediately stop local TTS if speaking
+    if (command === 'stop') {
+      screenReader.stop();
+    } else if (command === 'pause') {
+      screenReader.pause();
+    } else if (command === 'resume') {
+      screenReader.resume();
+    }
+
+    // Send to backend via WebSocket
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "interrupt",
+        command: command,
+        user_id: userId,
+      }));
+    } else {
+      // Fallback: HTTP POST
+      fetch("http://localhost:8000/process", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          user_id: userId,
+          input: `AURA ${command}`,
+          device_type: deviceType,
+        }),
+      }).catch(err => console.warn('[Interrupt] HTTP fallback failed:', err));
+    }
+  }, [sessionId, userId, deviceType]);
+
+  /* ---------- READ ALOUD FULL CONTENT ---------- */
+  const handleReadAloud = useCallback(() => {
+    if (structuredResponse?.full_content) {
+      setOrbState("speaking");
+      screenReader.speak(structuredResponse.full_content, {
+        onProgress: (current, total) => {
+          console.log(`[TTS] Reading sentence ${current}/${total}`);
+        },
+        onComplete: () => setOrbState("idle")
+      });
+    }
+  }, [structuredResponse]);
+
   /* ---------- TEXT → AGENT ---------- */
   const processText = async (text) => {
     try {
       console.log("[Agent] Processing input:", text);
 
-      // Detect "stop" command
-      if (text.toLowerCase().includes("stop")) {
-        console.log("[Agent] STOP command detected - initiating stop sequence");
+      // Check for interrupt commands in text input too
+      const lowerText = text.toLowerCase().trim();
+      for (const [phrase, command] of Object.entries(INTERRUPT_COMMANDS)) {
+        if (lowerText.includes(phrase) || lowerText === command) {
+          console.log(`[Agent] Interrupt command in text: "${phrase}" → ${command}`);
+          sendInterrupt(command);
+          return;
+        }
+      }
+
+      // Detect "stop" command (legacy)
+      if (lowerText === "stop" || lowerText === "aura stop") {
+        console.log("[Agent] STOP command detected");
+        sendInterrupt("stop");
         handleStopSequence();
         return;
       }
 
       // Detect settings request
       if (
-        text.toLowerCase().includes("settings") ||
-        text.toLowerCase().includes("open settings") ||
-        text.toLowerCase().includes("show settings")
+        lowerText.includes("settings") ||
+        lowerText.includes("open settings") ||
+        lowerText.includes("show settings")
       ) {
         console.log("[Agent] Settings request detected");
         setShowSettings(true);
@@ -473,49 +713,70 @@ function App() {
 
       console.log("[Agent] Clarification mode:", !!clarificationResponseToId);
 
-      // Start thinking sequence (local simulation only when SSE not available)
-      if (!sseConnected) await startThinkingSequence();
+      // Enter transparent execution mode during processing
+      setExecutionMode("transparent");
 
-      const res = await fetch("http://localhost:8000/process", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
+      // Send via WebSocket if connected, fallback to HTTP
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        const msgType = clarificationResponseToId ? "clarification_response" : "user_input";
+        const payload = {
+          type: msgType,
           user_id: userId,
-          input: text,
-          is_clarification: !!clarificationResponseToId,
-          clarification_id: clarificationResponseToId || null,
           device_type: deviceType,
-        }),
-      });
-
-      console.log("[Agent] Status:", res.status);
-      const data = await res.json();
-      console.log("[Agent] Full response:", data);
-
-      if (!res.ok) {
-        throw new Error(data.detail || "Backend error");
-      }
-
-      setThinkingSteps([]);
-      setIsThinking(false);
-
-      if (data.status === "clarification_needed") {
-        console.log("[Agent] Clarification requested:", data.question);
-        setClarificationResponseToId(data.response_id);
-        setAssistantMessage(data.question);
-        await speakResponse(data.question);
+        };
+        if (clarificationResponseToId) {
+          payload.answer = text;
+          payload.clarification_id = clarificationResponseToId;
+        } else {
+          payload.text = text;
+        }
+        wsRef.current.send(JSON.stringify(payload));
+        console.log(`[WS] Sent ${msgType}:`, text);
       } else {
-        const responseText =
-          data.text ||
-          data.result?.response ||
-          data.result ||
-          "Task completed";
+        // HTTP fallback
+        console.log("[Agent] Using HTTP fallback (WS not connected)");
+        if (!sseConnected) await startThinkingSequence();
 
-        console.log("[Agent] Final response:", responseText);
-        setClarificationResponseToId(null);
-        setAssistantMessage(responseText);
-        await speakResponse(responseText);
+        const res = await fetch("http://localhost:8000/process", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            user_id: userId,
+            input: text,
+            is_clarification: !!clarificationResponseToId,
+            clarification_id: clarificationResponseToId || null,
+            device_type: deviceType,
+          }),
+        });
+
+        console.log("[Agent] Status:", res.status);
+        const data = await res.json();
+
+        if (!res.ok) throw new Error(data.detail || "Backend error");
+
+        setThinkingSteps([]);
+        setIsThinking(false);
+
+        if (data.status === "clarification_needed") {
+          setClarificationResponseToId(data.response_id);
+          setAssistantMessage(data.question);
+          setOrbState("speaking");
+          screenReader.speak(data.question, {
+            onComplete: () => setOrbState("idle")
+          });
+        } else {
+          const responseText = data.text || data.result?.response || data.result || "Task completed";
+          setClarificationResponseToId(null);
+          setAssistantMessage(responseText);
+          setOrbState("speaking");
+          screenReader.speak(responseText, {
+            onComplete: () => {
+              setOrbState("idle");
+              setExecutionMode("normal");
+            }
+          });
+        }
       }
     } catch (error) {
       console.error("[Agent] Error:", error);
@@ -523,12 +784,14 @@ function App() {
       setAssistantMessage("Backend error");
       setThinkingSteps([]);
       setIsThinking(false);
+      setExecutionMode("normal");
     }
   };
 
   /* ---------- STOP SEQUENCE ---------- */
   const handleStopSequence = () => {
     console.log("[System] Executing stop sequence");
+    screenReader.stop(); // Stop client-side TTS
     stopRecording();
     setOrbState("idle");
     setUserMessage("");
@@ -538,115 +801,159 @@ function App() {
     setShowSettings(false);
     setThinkingSteps([]);
     setIsThinking(false);
+    setExecutionMode("normal");
+    setStructuredResponse(null);
+    setOfferReadAloud(false);
   };
 
-  /* ---------- TEXT → SPEECH ---------- */
+  /* ---------- EXECUTION MODE TOGGLE ---------- */
+  const toggleExecutionMode = useCallback(() => {
+    setExecutionMode(prev => prev === "normal" ? "transparent" : "normal");
+  }, []);
+
+  const enterWidgetMode = useCallback(() => {
+    window.electronAPI?.enterWidgetMode?.();
+    setExecutionMode("widget");
+  }, []);
+
+  const exitWidgetMode = useCallback(() => {
+    window.electronAPI?.exitWidgetMode?.();
+    setExecutionMode("normal");
+  }, []);
+
+  /* ---------- TEXT → SPEECH (Client-side via ScreenReader) ---------- */
   const speakResponse = async (text) => {
-  try {
-    console.log("[TTS] Generating speech for:", text);
-
-    const res = await fetch("http://localhost:8000/text-to-speech", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        voice_name: ttsVoice,
-      }),
-    });
-
-    const data = await res.json();
-    console.log("[TTS] Response received:", {
-      status: data.status,
-      format: data.format,
-      language: data.language,
-      provider: data.provider,
-      audioDataLength: data.audio_data?.length
-    });
-
-    if (!res.ok) {
-      throw new Error(data.detail || "TTS failed");
-    }
-
-    // ✅ FIX 1: Use the format from the response
-    const format = data.format || 'mp3';
-    console.log("[TTS] Audio format:", format);
-
-    // ✅ FIX 2: Convert base64 to blob correctly
-    const binaryString = atob(data.audio_data);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    
-    // ✅ FIX 3: Use correct MIME type based on format
-    const mimeType = format === 'mp3' ? 'audio/mpeg' : 'audio/wav';
-    const audioBlob = new Blob([bytes], { type: mimeType });
-    console.log("[TTS] Audio blob created:", {
-      size: audioBlob.size,
-      type: audioBlob.type
-    });
-
-    const url = URL.createObjectURL(audioBlob);
-    console.log("[TTS] Audio blob URL:", url);
-    
-    // ✅ FIX 4: Set source and add better error handling
-    audioRef.current.src = url;
-
-    // ✅ FIX 5: Add all event listeners BEFORE loading
-    audioRef.current.onloadeddata = () => {
-      console.log("[TTS] Audio loaded, duration:", audioRef.current.duration);
-    };
-
-    audioRef.current.oncanplaythrough = async () => {
-      console.log("[TTS] Audio ready to play");
+    try {
+      console.log("[TTS] Speaking via client-side ScreenReader:", text?.substring(0, 50));
       setOrbState("speaking");
-      
-      try {
-        await audioRef.current.play();
-        console.log("[TTS] Playback started successfully");
-      } catch (playError) {
-        console.error("[TTS] Play error:", playError);
-        
-        // ✅ FIX 6: Handle autoplay blocking
-        if (playError.name === 'NotAllowedError') {
-          console.warn("[TTS] Autoplay blocked");
+      await screenReader.speak(text, {
+        onComplete: () => {
+          console.log("[TTS] Playback finished");
+          setOrbState("idle");
         }
-        setOrbState("idle");
-      }
-    };
-
-    audioRef.current.onended = () => {
-      console.log("[TTS] Playback finished");
-      URL.revokeObjectURL(url);
-      setOrbState("idle");
-    };
-
-    audioRef.current.onerror = (err) => {
-      console.error("[TTS] Audio error:", err);
-      console.error("[TTS] Error details:", {
-        code: audioRef.current.error?.code,
-        message: audioRef.current.error?.message
       });
-      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("[TTS] Error:", error);
       setOrbState("idle");
-    };
-
-    // ✅ FIX 7: Load the audio
-    console.log("[TTS] Loading audio...");
-    audioRef.current.load();
-
-  } catch (error) {
-    console.error("[TTS] Error:", error);
-    setOrbState("idle");
-  }
-};
+    }
+  };
 
 
   /* ---------- RENDER ---------- */
+  const isExecuting = orbState === "processing" || orbState === "speaking" || isThinking;
+  const appClassName = [
+    "app-root",
+    executionMode === "transparent" && isExecuting ? "transparent-mode" : "",
+    executionMode === "widget" ? "widget-mode" : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div className="app-root">
+    <div className={appClassName}>
+      {/* ===== Title bar (custom — frameless window) ===== */}
+      {executionMode !== "widget" && (
+        <div className="titlebar">
+          <div className="titlebar-drag">
+            <span className="titlebar-title">AURA</span>
+          </div>
+          <div className="titlebar-buttons">
+            {isExecuting && (
+              <button
+                className="titlebar-btn titlebar-mode"
+                onClick={toggleExecutionMode}
+                title={executionMode === "normal" ? "Go transparent" : "Back to normal"}
+              >
+                {executionMode === "normal" ? "👁️" : "🔲"}
+              </button>
+            )}
+            <button className="titlebar-btn" onClick={enterWidgetMode} title="Minimize to widget">⬜</button>
+            <button className="titlebar-btn" onClick={() => window.electronAPI?.minimizeWindow?.()} title="Minimize">—</button>
+            <button className="titlebar-btn" onClick={() => window.electronAPI?.maximizeWindow?.()} title="Maximize">□</button>
+            <button className="titlebar-btn titlebar-close" onClick={() => window.electronAPI?.closeWindow?.()} title="Close">×</button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Widget mini-player ===== */}
+      {executionMode === "widget" && (
+        <div className="widget-player">
+          {/* Drag handle */}
+          <div className="widget-drag-strip" />
+
+          {/* Left: Orb + Status */}
+          <div className="widget-left">
+            <div className={`widget-orb orb-${orbState}`}>
+              {orbState === "processing" ? "⚡" : orbState === "speaking" ? "🔊" : "●"}
+            </div>
+            <div className="widget-status-text">
+              {isExecuting
+                ? (isThinking
+                    ? (thinkingSteps.length > 0 ? thinkingSteps[thinkingSteps.length - 1] : "Thinking...")
+                    : assistantMessage
+                      ? (assistantMessage.length > 40 ? assistantMessage.slice(0, 40) + "…" : assistantMessage)
+                      : "Processing...")
+                : "AURA"}
+            </div>
+          </div>
+
+          {/* Center: Input area */}
+          <div className="widget-input-area">
+            {!isExecuting ? (
+              <>
+                <input
+                  className="widget-text-input"
+                  type="text"
+                  placeholder="Ask AURA..."
+                  value={widgetText}
+                  onChange={(e) => setWidgetText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && widgetText.trim()) {
+                      handleTextSubmit(widgetText);
+                      setWidgetText("");
+                    }
+                  }}
+                />
+                <button
+                  className="widget-mic-btn"
+                  onClick={handleMicClick}
+                  title={isRecording ? "Stop recording" : "Voice input"}
+                >
+                  <Mic size={16} />
+                </button>
+              </>
+            ) : (
+              <div className="widget-exec-controls">
+                <button
+                  className="widget-action-btn widget-pause"
+                  onClick={() => sendInterrupt("pause")}
+                  title="Pause"
+                >
+                  <Pause size={14} />
+                </button>
+                <button
+                  className="widget-action-btn widget-stop"
+                  onClick={() => sendInterrupt("stop")}
+                  title="Stop"
+                >
+                  <Square size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Right: Window controls */}
+          <div className="widget-window-controls">
+            <button className="widget-win-btn" onClick={exitWidgetMode} title="Expand">
+              ↗
+            </button>
+            <button className="widget-win-btn widget-win-close" onClick={() => window.electronAPI?.closeWindow?.()} title="Close">
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
       <Sidebar
-        collapsed={isSidebarCollapsed}
+        collapsed={isSidebarCollapsed || executionMode === "widget"}
         onToggle={() => {
           console.log("[UI] Sidebar toggled");
           setIsSidebarCollapsed((p) => !p);
@@ -661,18 +968,27 @@ function App() {
         </video>
         
         <div className="main-overlay">
-          {/* Header stays at the top */}
           <HeaderContent userName={userName} />
 
           {/* Thinking Indicator */}
           {isThinking && <ThinkingIndicator steps={thinkingSteps} />}
 
-          {/* Response Display Area - Gemini Style */}
+          {/* Response Display Area */}
           {assistantMessage && !isThinking && (
             <div className="response-container" role="status" aria-live="polite" aria-atomic="true" aria-label="Assistant response">
               <div className="response-message">
                 {assistantMessage}
               </div>
+              {/* Read Aloud offer */}
+              {offerReadAloud && structuredResponse?.full_content && (
+                <button 
+                  className="read-aloud-btn"
+                  onClick={handleReadAloud}
+                  title="Read full content aloud"
+                >
+                  🔊 Read Aloud
+                </button>
+              )}
             </div>
           )}
 
@@ -686,6 +1002,8 @@ function App() {
             setChatMode={setChatMode}
             onSendText={handleTextSubmit}
             onSettingsClick={handleSettingsClick}
+            isExecuting={isExecuting}
+            onInterrupt={sendInterrupt}
           />
         </div>
       </main>

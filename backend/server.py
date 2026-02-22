@@ -7,7 +7,7 @@ import time
 import io
 import wave
 from pathlib import Path
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -28,13 +28,52 @@ from agents.reasoning_agent import start_reasoning_agent
 from agents.execution_agent.RAG.code_execution import initialize_execution_agent_for_server
 from agents.utils.protocol import (
     AgentMessage, MessageType, AgentType, Channels,
-    ClarificationMessage
+    ClarificationMessage, StructuredResponse, ContextSnapshot, ResponseType
 )
 from ThinkingStepManager import ThinkingStepManager
 from routes.device_routes import router as device_router
 from dotenv import load_dotenv
 import json
 from memory_api import router as memory_router
+
+# --- WebSocket connection manager ---
+class ConnectionManager:
+    """Manages active WebSocket connections per session"""
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}  # session_id -> ws
+    
+    async def connect(self, session_id: str, websocket: WebSocket):
+        await websocket.accept()
+        # Close existing connection for same session if any
+        if session_id in self.active_connections:
+            try:
+                await self.active_connections[session_id].close()
+            except Exception:
+                pass
+        self.active_connections[session_id] = websocket
+        logger.info(f"🔌 WebSocket connected: {session_id}")
+    
+    def disconnect(self, session_id: str):
+        self.active_connections.pop(session_id, None)
+        logger.info(f"🔌 WebSocket disconnected: {session_id}")
+    
+    async def send_to_session(self, session_id: str, data: dict):
+        ws = self.active_connections.get(session_id)
+        if ws:
+            try:
+                await ws.send_json(data)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to send to {session_id}: {e}")
+                self.disconnect(session_id)
+    
+    async def broadcast(self, data: dict):
+        for sid in list(self.active_connections.keys()):
+            await self.send_to_session(sid, data)
+
+ws_manager = ConnectionManager()
+
+# Context snapshot store (in-memory, could move to MongoDB)
+context_snapshots: dict[str, ContextSnapshot] = {}
 
 load_dotenv()
 
@@ -74,6 +113,7 @@ async def lifespan(app: FastAPI):
     # Subscribe to output channels BEFORE starting agents
     broker.subscribe(Channels.LANGUAGE_OUTPUT, handle_language_output)
     broker.subscribe(Channels.COORDINATOR_TO_LANGUAGE, handle_coordinator_output)
+    broker.subscribe(Channels.WEBSOCKET_OUTPUT, handle_ws_output)
     logger.info("✅ Subscribed to output channels")
     
     # Start all agents as background tasks (don't wait for them)
@@ -542,6 +582,361 @@ async def handle_coordinator_output(message):
             pending_responses[target_id].set_result(response)
         else:
             logger.warning(f"⚠️ No pending response for {target_id}, trying fallback...")
+
+
+async def handle_ws_output(message):
+    """Route broker messages to WebSocket clients"""
+    if isinstance(message, dict):
+        message = AgentMessage(**message)
+    session_id = message.session_id
+    if session_id:
+        await ws_manager.send_to_session(session_id, {
+            "type": message.payload.get("ws_type", "message"),
+            **message.payload
+        })
+
+
+# ============================================================================
+# WebSocket Endpoint — replaces blocking POST /process for real-time comms
+# ============================================================================
+
+# Interrupt command mapping (English + Arabic)
+INTERRUPT_COMMANDS = {
+    # English
+    "stop": "stop", "cancel": "stop", "abort": "stop",
+    "aura stop": "stop", "aura cancel": "stop",
+    "pause": "pause", "wait": "pause", "hold on": "pause",
+    "aura pause": "pause", "aura wait": "pause",
+    "continue": "resume", "go on": "resume", "resume": "resume",
+    "aura continue": "resume", "aura resume": "resume",
+    "undo": "undo", "undo that": "undo", "go back": "undo",
+    "aura undo": "undo",
+    "redo": "retry", "try again": "retry",
+    "aura redo": "retry",
+    # Arabic
+    "أورا وقف": "stop", "وقف": "stop", "أوقف": "stop", "إلغاء": "stop",
+    "أورا انتظر": "pause", "انتظر": "pause",
+    "أورا استمر": "resume", "استمر": "resume",
+    "أورا تراجع": "undo", "تراجع": "undo",
+    "أورا أعد": "retry", "أعد": "retry",
+}
+
+def detect_interrupt(text: str):
+    """Detect interrupt commands in text (case-insensitive, partial match)"""
+    text_lower = text.strip().lower()
+    # Exact match first
+    if text_lower in INTERRUPT_COMMANDS:
+        return INTERRUPT_COMMANDS[text_lower]
+    # Partial: check if any command is at the start of the text
+    for cmd, action in INTERRUPT_COMMANDS.items():
+        if text_lower.startswith(cmd):
+            return action
+    return None
+
+
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """
+    Bidirectional WebSocket for real-time communication.
+    
+    Client → Server messages:
+      { type: "user_input", text: "...", device_type: "...", user_id: "..." }
+      { type: "interrupt", command: "stop|pause|resume|undo|retry" }
+      { type: "clarification_response", answer: "...", user_id: "..." }
+    
+    Server → Client messages:
+      { type: "thinking", step: "..." }
+      { type: "task_progress", task_id: "...", status: "..." }
+      { type: "clarification_needed", question: "..." }
+      { type: "response_complete", text: "...", ... }
+      { type: "proactive_prompt", suggestion: "...", offer_actions: [...] }
+      { type: "interrupt_ack", message: "...", options: [...] }
+      { type: "context_saved", snapshot_id: "..." }
+    """
+    await ws_manager.connect(session_id, websocket)
+    
+    # Subscribe a session-specific handler for broker broadcasts
+    async def ws_broadcast_handler(message):
+        if isinstance(message, dict):
+            try:
+                message = AgentMessage(**message)
+            except Exception:
+                return
+        if message.session_id == session_id or message.session_id is None:
+            payload = message.payload or {}
+            # Route thinking updates
+            if payload.get("action") == "thinking_update":
+                await ws_manager.send_to_session(session_id, {
+                    "type": "thinking",
+                    "step": payload.get("step", "")
+                })
+            elif payload.get("action") == "thinking_clear":
+                await ws_manager.send_to_session(session_id, {
+                    "type": "thinking_clear"
+                })
+            # Route task progress
+            elif payload.get("ws_type") == "task_progress":
+                await ws_manager.send_to_session(session_id, payload)
+    
+    broker.subscribe(Channels.BROADCAST, ws_broadcast_handler)
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type", "")
+            
+            # --- INTERRUPT COMMAND ---
+            if msg_type == "interrupt":
+                command = data.get("command", "stop")
+                logger.info(f"🛑 WebSocket interrupt: {command} for session {session_id}")
+                
+                if command == "undo":
+                    # Check for context snapshot
+                    snap = context_snapshots.get(session_id)
+                    if snap and snap.is_reversible:
+                        await ws_manager.send_to_session(session_id, {
+                            "type": "interrupt_ack",
+                            "command": "undo",
+                            "message": f"Undone. {len(snap.completed_tasks)} tasks were rolled back.",
+                            "snapshot_id": snap.snapshot_id,
+                            "options": ["resume", "discard"]
+                        })
+                    else:
+                        await ws_manager.send_to_session(session_id, {
+                            "type": "interrupt_ack",
+                            "command": "undo",
+                            "message": "Nothing to undo.",
+                            "options": []
+                        })
+                    continue
+                
+                # Send interrupt to coordinator
+                interrupt_msg = AgentMessage(
+                    message_type=MessageType.INTERRUPT_COMMAND,
+                    sender=AgentType.LANGUAGE,
+                    receiver=AgentType.COORDINATOR,
+                    session_id=session_id,
+                    payload={"command": command}
+                )
+                await broker.publish(Channels.INTERRUPT_CONTROL, interrupt_msg)
+                
+                # Save context snapshot on stop
+                if command == "stop":
+                    from agents.coordinator_agent.coordinator_agent import task_queue
+                    snapshot = ContextSnapshot(
+                        session_id=session_id,
+                        user_id=data.get("user_id", "unknown"),
+                        original_request=data.get("original_request", ""),
+                        pending_tasks=[],
+                        is_reversible=False
+                    )
+                    context_snapshots[session_id] = snapshot
+                
+                await ws_manager.send_to_session(session_id, {
+                    "type": "interrupt_ack",
+                    "command": command,
+                    "message": f"Command '{command}' executed.",
+                    "options": ["resume", "undo", "discard"] if command == "stop" else []
+                })
+                continue
+            
+            # --- USER INPUT ---
+            if msg_type == "user_input":
+                user_text = data.get("text", "").strip()
+                device_type = data.get("device_type", "desktop")
+                user_id = data.get("user_id", "test_user")
+                
+                if not user_text:
+                    continue
+                
+                # Check for interrupt commands in text input
+                interrupt_action = detect_interrupt(user_text)
+                if interrupt_action:
+                    logger.info(f"🛑 Voice/text interrupt detected: '{user_text}' → {interrupt_action}")
+                    interrupt_msg = AgentMessage(
+                        message_type=MessageType.INTERRUPT_COMMAND,
+                        sender=AgentType.LANGUAGE,
+                        receiver=AgentType.COORDINATOR,
+                        session_id=session_id,
+                        payload={"command": interrupt_action}
+                    )
+                    await broker.publish(Channels.INTERRUPT_CONTROL, interrupt_msg)
+                    
+                    if interrupt_action == "stop":
+                        snapshot = ContextSnapshot(
+                            session_id=session_id,
+                            user_id=user_id,
+                            original_request=user_text,
+                            is_reversible=False
+                        )
+                        context_snapshots[session_id] = snapshot
+                    
+                    await ws_manager.send_to_session(session_id, {
+                        "type": "interrupt_ack",
+                        "command": interrupt_action,
+                        "message": f"Command '{interrupt_action}' received.",
+                        "options": ["resume", "undo", "discard"] if interrupt_action in ("stop", "pause") else []
+                    })
+                    continue
+                
+                # Normal input → publish to Language Agent
+                message = AgentMessage(
+                    message_type=MessageType.TASK_REQUEST,
+                    sender=AgentType.LANGUAGE,
+                    receiver=AgentType.LANGUAGE,
+                    session_id=session_id,
+                    payload={
+                        "input": user_text,
+                        "device_type": device_type,
+                        "user_id": user_id
+                    }
+                )
+                
+                # Create pending response (same mechanism as HTTP)
+                future = asyncio.Future()
+                pending_responses[message.message_id] = future
+                
+                await ThinkingStepManager.update_step(session_id, "Processing input...", message.message_id)
+                await broker.publish(Channels.LANGUAGE_INPUT, message)
+                
+                # Wait for response asynchronously (don't block WebSocket read loop)
+                async def wait_and_send(msg_id, fut):
+                    try:
+                        response = await asyncio.wait_for(fut, timeout=60.0)
+                        await ThinkingStepManager.clear_steps(session_id)
+                        
+                        # Detect structured response
+                        ws_response = {"type": "response_complete"}
+                        if isinstance(response, dict):
+                            if response.get("status") == "clarification_needed":
+                                ws_response = {
+                                    "type": "clarification_needed",
+                                    "question": response.get("question", ""),
+                                    "response_id": response.get("response_id", "")
+                                }
+                            else:
+                                # Check for structured response with proactive prompts
+                                structured = response.get("structured_response")
+                                if structured:
+                                    ws_response = {
+                                        "type": "proactive_prompt" if structured.get("offer_read_aloud") else "response_complete",
+                                        "text": structured.get("spoken_text", response.get("text", "Task completed")),
+                                        "full_content": structured.get("full_content", ""),
+                                        "offer_read_aloud": structured.get("offer_read_aloud", False),
+                                        "offer_actions": structured.get("offer_actions", []),
+                                        "status": response.get("status", "completed"),
+                                        "task_id": response.get("task_id"),
+                                    }
+                                else:
+                                    ws_response = {
+                                        "type": "response_complete",
+                                        "text": response.get("text", "Task completed"),
+                                        "status": response.get("status", "completed"),
+                                        "task_id": response.get("task_id"),
+                                    }
+                        
+                        await ws_manager.send_to_session(session_id, ws_response)
+                    except asyncio.TimeoutError:
+                        await ThinkingStepManager.clear_steps(session_id)
+                        await ws_manager.send_to_session(session_id, {
+                            "type": "error",
+                            "message": "Request timed out"
+                        })
+                    finally:
+                        pending_responses.pop(msg_id, None)
+                
+                asyncio.create_task(wait_and_send(message.message_id, future))
+                continue
+            
+            # --- CLARIFICATION RESPONSE ---
+            if msg_type == "clarification_response":
+                answer = data.get("answer", "").strip()
+                user_id = data.get("user_id", "test_user")
+                device_type = data.get("device_type", "desktop")
+                
+                if not answer:
+                    continue
+                
+                # Check for interrupts even in clarification
+                interrupt_action = detect_interrupt(answer)
+                if interrupt_action:
+                    interrupt_msg = AgentMessage(
+                        message_type=MessageType.INTERRUPT_COMMAND,
+                        sender=AgentType.LANGUAGE,
+                        receiver=AgentType.COORDINATOR,
+                        session_id=session_id,
+                        payload={"command": interrupt_action}
+                    )
+                    await broker.publish(Channels.INTERRUPT_CONTROL, interrupt_msg)
+                    await ws_manager.send_to_session(session_id, {
+                        "type": "interrupt_ack",
+                        "command": interrupt_action,
+                        "message": f"Command '{interrupt_action}' received.",
+                        "options": []
+                    })
+                    continue
+                
+                message = AgentMessage(
+                    message_type=MessageType.CLARIFICATION_RESPONSE,
+                    sender=AgentType.LANGUAGE,
+                    receiver=AgentType.LANGUAGE,
+                    session_id=session_id,
+                    payload={
+                        "answer": answer,
+                        "input": answer,
+                        "device_type": device_type,
+                        "user_id": user_id
+                    }
+                )
+                
+                future = asyncio.Future()
+                pending_responses[message.message_id] = future
+                await broker.publish(Channels.LANGUAGE_INPUT, message)
+                
+                async def wait_clarification(msg_id, fut):
+                    try:
+                        response = await asyncio.wait_for(fut, timeout=60.0)
+                        ws_resp = {"type": "response_complete"}
+                        if isinstance(response, dict):
+                            if response.get("status") == "clarification_needed":
+                                ws_resp = {
+                                    "type": "clarification_needed",
+                                    "question": response.get("question", ""),
+                                    "response_id": response.get("response_id", "")
+                                }
+                            else:
+                                structured = response.get("structured_response")
+                                if structured and structured.get("offer_read_aloud"):
+                                    ws_resp = {
+                                        "type": "proactive_prompt",
+                                        "text": structured.get("spoken_text", response.get("text", "")),
+                                        "full_content": structured.get("full_content", ""),
+                                        "offer_read_aloud": True,
+                                        "offer_actions": structured.get("offer_actions", []),
+                                        "status": response.get("status", "completed"),
+                                    }
+                                else:
+                                    ws_resp = {
+                                        "type": "response_complete",
+                                        "text": response.get("text", "Task completed"),
+                                        "status": response.get("status", "completed"),
+                                    }
+                        await ws_manager.send_to_session(session_id, ws_resp)
+                    except asyncio.TimeoutError:
+                        await ws_manager.send_to_session(session_id, {
+                            "type": "error", "message": "Request timed out"
+                        })
+                    finally:
+                        pending_responses.pop(msg_id, None)
+                
+                asyncio.create_task(wait_clarification(message.message_id, future))
+                continue
+    
+    except WebSocketDisconnect:
+        ws_manager.disconnect(session_id)
+    except Exception as e:
+        logger.error(f"❌ WebSocket error: {e}", exc_info=True)
+        ws_manager.disconnect(session_id)
 
 
 @app.post("/reset")
