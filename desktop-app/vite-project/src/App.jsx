@@ -78,6 +78,15 @@ function App() {
     "أورا استمر": "resume", "أورا كمل": "resume", "أورا تراجع": "stop",
   };
 
+  // Detected user language — set on first voice interaction, persists for session
+  const [userLanguage, setUserLanguage] = useState(() => localStorage.getItem("userLanguage") || null);
+  // Whether to vocalize thinking steps
+  const [vocalizeSteps, setVocalizeSteps] = useState(true);
+  // Ref to track the last spoken step index (avoid re-speaking)
+  const lastSpokenStepRef = useRef(-1);
+  // Ref for vocalizeStep so WS/SSE closures always get the latest version
+  const vocalizeStepRef = useRef(null);
+
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioRef = useRef(new Audio());
@@ -86,6 +95,20 @@ function App() {
   // Speech recognition (wake-word)
   const { transcript, interimTranscript, finalTranscript, resetTranscript, listening, browserSupportsSpeechRecognition } = useSpeechRecognition();
 
+  // Start wake-word listening — use a language that can hear both EN and AR
+  const startWakeWordListening = useCallback(() => {
+    if (!browserSupportsSpeechRecognition) return;
+    try {
+      // Use empty string or a broad locale; Chrome will do best-effort multilingual detection.
+      // We cycle between en-US and ar-SA every 30s to catch both, OR use the user's detected lang.
+      const lang = userLanguage === 'ar' ? 'ar-SA' : 'en-US';
+      SpeechRecognition.startListening({ continuous: true, language: lang, interimResults: true });
+      console.log(`[Wake] Listening started (lang=${lang})`);
+    } catch (e) {
+      console.warn('[Wake] Failed to start listening:', e);
+    }
+  }, [browserSupportsSpeechRecognition, userLanguage]);
+
   // Ensure continuous listening starts on mount (if supported)
   useEffect(() => {
     if (!browserSupportsSpeechRecognition) {
@@ -93,29 +116,27 @@ function App() {
       return;
     }
 
-    try {
-      SpeechRecognition.startListening({ continuous: true, language: 'en-US', interimResults: true });
-      console.log('[Wake] Continuous wake-word listening started (mount)');
+    startWakeWordListening();
 
-      // Quick sanity-check: if recognition does not start within 1s, log a hint
-      setTimeout(() => {
-        if (!listening) {
-          console.warn('[Wake] SpeechRecognition did not report listening=true. Browser may not allow continuous recognition in this context.');
-        }
-      }, 1000);
-    } catch (e) {
-      console.warn('[Wake] Failed to start continuous listening on mount:', e);
-    }
+    // Quick sanity-check: if recognition does not start within 1s, log a hint
+    setTimeout(() => {
+      if (!listening) {
+        console.warn('[Wake] SpeechRecognition did not report listening=true. Browser may not allow continuous recognition in this context.');
+      }
+    }, 1000);
 
     return () => {
       try { SpeechRecognition.stopListening(); } catch (e) {}
     };
-  }, [browserSupportsSpeechRecognition]);
+  }, [browserSupportsSpeechRecognition, startWakeWordListening]);
 
   // Detect wake word AND interrupt commands in speech (always active, even during processing)
   useEffect(() => {
     const combined = `${interimTranscript || ''} ${finalTranscript || ''} ${transcript || ''}`.toLowerCase().trim();
     if (!combined) return;
+
+    // Log every detected phrase for debugging
+    console.log(`[Wake-Debug] Heard: "${combined}"`);
 
     // Check for interrupt commands FIRST (these work during processing/speaking)
     for (const [phrase, command] of Object.entries(INTERRUPT_COMMANDS)) {
@@ -127,9 +148,21 @@ function App() {
       }
     }
 
-    // Then check for wake word (only activates recording when idle)
-    if (/\baura\b/.test(combined)) {
-      console.log('[Wake] Wake word detected in speech transcript');
+    // Wake word detection — English "aura" OR Arabic "أورا" / "اورا" / "أوره" / "اوره"
+    const hasEnglishWake = /\baura\b/.test(combined);
+    const hasArabicWake = /أورا|اورا|أوره|اوره|اورة|أورة/.test(combined);
+
+    if (hasEnglishWake || hasArabicWake) {
+      const detectedLang = hasArabicWake ? 'ar' : 'en';
+      console.log(`[Wake] Wake word detected (${detectedLang}): "${combined}"`);
+
+      // Remember user language on first wake word
+      if (!userLanguage) {
+        setUserLanguage(detectedLang);
+        localStorage.setItem('userLanguage', detectedLang);
+        console.log(`[Wake] User language set to: ${detectedLang}`);
+      }
+
       resetTranscript();
       if (!isRecording && orbState !== 'processing' && orbState !== 'speaking') {
         startRecording();
@@ -189,6 +222,7 @@ function App() {
               if (prev.includes(msg.step)) return prev;
               return [...prev, msg.step];
             });
+            if (vocalizeStepRef.current) vocalizeStepRef.current(msg.step);
             setIsThinking(true);
             break;
 
@@ -334,15 +368,19 @@ function App() {
         if (data.step) {
           setThinkingSteps(prev => [...prev, data.step]);
           setIsThinking(true);
+          if (vocalizeStepRef.current) vocalizeStepRef.current(data.step);
         } else if (Array.isArray(data.steps)) {
           setThinkingSteps(data.steps);
           setIsThinking(data.steps.length > 0);
+          // Speak only the last step from batch
+          if (data.steps.length > 0 && vocalizeStepRef.current) vocalizeStepRef.current(data.steps[data.steps.length - 1]);
         }
       } catch (err) {
         console.warn("[UI] Non-JSON SSE payload:", event.data);
         if (event.data && typeof event.data === 'string' && event.data.trim().length > 0) {
           setThinkingSteps(prev => [...prev, event.data]);
           setIsThinking(true);
+          if (vocalizeStepRef.current) vocalizeStepRef.current(event.data);
         }
       }
     };
@@ -359,6 +397,31 @@ function App() {
     };
   }, [sessionId, wsConnected]);
 
+  /* ---------- VOCALIZE THINKING STEP (local TTS) ---------- */
+  const vocalizeStep = useCallback((text) => {
+    if (!vocalizeSteps || !text) return;
+    try {
+      // Cancel previous step utterance so they don't queue up
+      window.speechSynthesis.cancel();
+      const isArabic = /[\u0600-\u06FF]/.test(text);
+      const lang = isArabic ? 'ar' : (userLanguage || 'en');
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = lang === 'ar' ? 'ar-SA' : 'en-US';
+      utterance.rate = 1.2;
+      utterance.volume = 0.7;
+      const voices = window.speechSynthesis.getVoices();
+      const matchVoice = voices.find(v => v.lang.startsWith(lang)) || voices[0];
+      if (matchVoice) utterance.voice = matchVoice;
+      window.speechSynthesis.speak(utterance);
+      console.log(`[TTS-Step] Speaking: "${text}" (${lang})`);
+    } catch (e) {
+      console.warn('[TTS-Step] Failed:', e);
+    }
+  }, [vocalizeSteps, userLanguage]);
+
+  // Keep ref in sync so WS/SSE closures always use the latest
+  useEffect(() => { vocalizeStepRef.current = vocalizeStep; }, [vocalizeStep]);
+
   /* ---------- HANDLE THINKING UPDATES ---------- */
   const handleThinkingUpdate = (step) => {
     console.log("[UI] Updating thinking step:", step);
@@ -367,7 +430,7 @@ function App() {
       if (prev.includes(step)) return prev;
       return [...prev, step];
     });
-    
+    vocalizeStep(step);
     // Ensure thinking indicator is visible
     setIsThinking(true);
   };
@@ -441,6 +504,7 @@ function App() {
     
     for (let i = 0; i < steps.length; i++) {
       setThinkingSteps(prev => [...prev, steps[i]]);
+      vocalizeStep(steps[i]);
       await new Promise(resolve => setTimeout(resolve, 800));
     }
     
@@ -478,10 +542,8 @@ function App() {
 
         // Resume wake-word listening after processing audio
         try {
-          if (SpeechRecognition.browserSupportsSpeechRecognition()) {
-            SpeechRecognition.startListening({ continuous: true, language: 'en-US' });
-            console.log('[Wake] Resumed wake-word listening');
-          }
+          startWakeWordListening();
+          console.log('[Wake] Resumed wake-word listening');
         } catch (e) {
           console.warn('[Wake] Failed to resume listening:', e);
         }
