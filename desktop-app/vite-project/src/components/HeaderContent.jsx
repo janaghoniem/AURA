@@ -43,7 +43,7 @@ const getTimeGreeting = (user) => {
   return `💤 Burning the midnight oil, ${user}?`;
 };
 
-const HeaderContent = ({ userName = "Labubu", mode = "default" }) => {
+const HeaderContent = ({ userName = "User", mode = "default" }) => {
   const [greeting] = useState(getTimeGreeting(userName));
 
   const headline = useMemo(() => {

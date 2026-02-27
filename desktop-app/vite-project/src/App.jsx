@@ -50,7 +50,7 @@ function App() {
   const [deviceType, setDeviceType] = useState("desktop");
   const [ttsVoice, setTtsVoice] = useState(() => localStorage.getItem("ttsVoice") || "Gacrux");
   const [screenSize, setScreenSize] = useState("desktop");
-  const [userName, setUserName] = useState("Labubu");
+  const [userName, setUserName] = useState("User");
   const [thinkingSteps, setThinkingSteps] = useState([]);
   const [isThinking, setIsThinking] = useState(false);
   // True when server-provided SSE thinking stream is connected
