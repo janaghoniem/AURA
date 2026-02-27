@@ -7,7 +7,7 @@ import VoiceControls from "./components/VoiceControls";
 import SettingsModal from "./components/SettingsModal";
 import ThinkingIndicator from "./components/ThinkingIndicator";
 import screenReader from "./utils/ScreenReader";
-import { Mic, Pause, Square } from "lucide-react";
+import { Mic, Pause, Square, Eye, Maximize2, Minus, X, Maximize, PictureInPicture2, ArrowUpRight } from "lucide-react";
 
 function App() {
   /* ---------- STATE ---------- */
@@ -245,6 +245,11 @@ function App() {
               setIsThinking(false);
               setThinkingSteps([]);
               setAssistantMessage(`Stopped. ${msg.command === 'stop' ? 'Task cancelled.' : ''}`);
+              // Exit widget if auto-triggered
+              if (autoWidgetTriggeredRef.current) {
+                window.electronAPI?.exitWidgetMode?.();
+                autoWidgetTriggeredRef.current = false;
+              }
               setExecutionMode("normal");
             } else if (msg.command === 'pause') {
               setAssistantMessage("Paused. Say 'AURA resume' to continue.");
@@ -801,9 +806,14 @@ function App() {
     setShowSettings(false);
     setThinkingSteps([]);
     setIsThinking(false);
-    setExecutionMode("normal");
     setStructuredResponse(null);
     setOfferReadAloud(false);
+    // Exit widget if auto-triggered
+    if (autoWidgetTriggeredRef.current) {
+      window.electronAPI?.exitWidgetMode?.();
+      autoWidgetTriggeredRef.current = false;
+    }
+    setExecutionMode("normal");
   };
 
   /* ---------- EXECUTION MODE TOGGLE ---------- */
@@ -839,6 +849,38 @@ function App() {
   };
 
 
+  /* ---------- AUTO WIDGET / FULLSCREEN TOGGLE ---------- */
+  // Track previous orbState to detect transitions
+  const prevOrbStateRef = useRef(orbState);
+  const autoWidgetTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    const prevState = prevOrbStateRef.current;
+    prevOrbStateRef.current = orbState;
+
+    const wasIdle = prevState === "idle" || prevState === "listening";
+    const isNowExecuting = orbState === "processing";
+
+    // Auto-enter widget when execution starts (only from idle/listening)
+    if (wasIdle && isNowExecuting && executionMode === "normal") {
+      console.log("[Auto-Widget] Execution started → entering widget mode");
+      window.electronAPI?.enterWidgetMode?.();
+      setExecutionMode("widget");
+      autoWidgetTriggeredRef.current = true;
+    }
+  }, [orbState, executionMode]);
+
+  // Auto-exit widget when execution finishes (only if we auto-entered)
+  useEffect(() => {
+    const isNowIdle = orbState === "idle" && !isThinking;
+    if (isNowIdle && executionMode === "widget" && autoWidgetTriggeredRef.current) {
+      console.log("[Auto-Widget] Execution done → exiting widget mode");
+      window.electronAPI?.exitWidgetMode?.();
+      setExecutionMode("normal");
+      autoWidgetTriggeredRef.current = false;
+    }
+  }, [orbState, isThinking, executionMode]);
+
   /* ---------- RENDER ---------- */
   const isExecuting = orbState === "processing" || orbState === "speaking" || isThinking;
   const appClassName = [
@@ -862,13 +904,21 @@ function App() {
                 onClick={toggleExecutionMode}
                 title={executionMode === "normal" ? "Go transparent" : "Back to normal"}
               >
-                {executionMode === "normal" ? "👁️" : "🔲"}
+                {executionMode === "normal" ? <Eye size={14} /> : <Maximize2 size={14} />}
               </button>
             )}
-            <button className="titlebar-btn" onClick={enterWidgetMode} title="Minimize to widget">⬜</button>
-            <button className="titlebar-btn" onClick={() => window.electronAPI?.minimizeWindow?.()} title="Minimize">—</button>
-            <button className="titlebar-btn" onClick={() => window.electronAPI?.maximizeWindow?.()} title="Maximize">□</button>
-            <button className="titlebar-btn titlebar-close" onClick={() => window.electronAPI?.closeWindow?.()} title="Close">×</button>
+            <button className="titlebar-btn" onClick={enterWidgetMode} title="Minimize to widget">
+              <PictureInPicture2 size={14} />
+            </button>
+            <button className="titlebar-btn" onClick={() => window.electronAPI?.minimizeWindow?.()} title="Minimize">
+              <Minus size={14} />
+            </button>
+            <button className="titlebar-btn" onClick={() => window.electronAPI?.maximizeWindow?.()} title="Maximize">
+              <Maximize size={14} />
+            </button>
+            <button className="titlebar-btn titlebar-close" onClick={() => window.electronAPI?.closeWindow?.()} title="Close">
+              <X size={14} />
+            </button>
           </div>
         </div>
       )}
@@ -943,10 +993,10 @@ function App() {
           {/* Right: Window controls */}
           <div className="widget-window-controls">
             <button className="widget-win-btn" onClick={exitWidgetMode} title="Expand">
-              ↗
+              <ArrowUpRight size={14} />
             </button>
             <button className="widget-win-btn widget-win-close" onClick={() => window.electronAPI?.closeWindow?.()} title="Close">
-              ×
+              <X size={14} />
             </button>
           </div>
         </div>

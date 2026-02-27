@@ -1016,7 +1016,7 @@ body {
   top: 0;
   left: 0;
   right: 0;
-  height: 36px;
+  height: 40px;
   z-index: 10001;
   display: flex;
   align-items: center;
@@ -1031,7 +1031,7 @@ body {
   height: 100%;
   display: flex;
   align-items: center;
-  padding-left: 16px;
+  padding-left: 18px;
   -webkit-app-region: drag;
 }
 
@@ -1045,22 +1045,31 @@ body {
 
 .titlebar-buttons {
   display: flex;
+  align-items: center;
   height: 100%;
+  gap: 0;
   -webkit-app-region: no-drag;
 }
 
 .titlebar-btn {
-  width: 46px;
+  width: 44px;
   height: 100%;
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.5);
-  font-size: 13px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: background 0.15s ease, color 0.15s ease;
+  padding: 0;
+  line-height: 1;
+}
+
+.titlebar-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
 }
 
 .titlebar-btn:hover {
@@ -1069,8 +1078,7 @@ body {
 }
 
 .titlebar-btn.titlebar-mode {
-  font-size: 15px;
-  width: 40px;
+  width: 44px;
 }
 
 .titlebar-btn.titlebar-close:hover {
@@ -1080,7 +1088,7 @@ body {
 
 /* Push content below title bar */
 .app-root .sidebar {
-  padding-top: 36px;
+  padding-top: 40px;
 }
 
 .app-root .main-area {
@@ -1088,7 +1096,7 @@ body {
 }
 
 .app-root .main-overlay {
-  padding-top: 44px;
+  padding-top: 48px;
 }
 
 /* ==================== WIDGET MODE ==================== */
@@ -1331,10 +1339,17 @@ body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 14px;
   transition: all 0.15s ease;
   -webkit-app-region: no-drag;
   pointer-events: auto;
+  padding: 0;
+  line-height: 1;
+}
+
+.widget-win-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
 }
 
 .widget-win-btn:hover {
